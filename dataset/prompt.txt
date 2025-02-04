@@ -25,43 +25,14 @@ Your goal is to produce a JSON object capturing the following information from t
     f) key_phrases: Important terms/phrases extracted from the transcript, with any relevance or importance score.
 
 3. A 100 word summary of what the video is about. 
-                                  4. A 50 word summary of what the video is about.
-                                  5. A 10 word summary of what the videos is about.
+4. A 50 word summary of what the video is about.
+5. A 10 word summary of what the videos is about.
 
-4. For each segment in the captions generate a Gloss translation in American Sign Language. To do so follow these specific rules:
-                                  
-                                  American Sign Language grammar
+6. For part of the transcript generate a Gloss translation in American Sign Language. To help you below I have provided context from a wikipedia article on ASL grammar. You must include the glosses in the data you provide. 
 
-Article
-Talk
-Read
-Edit
-View history
+// ASL Grammar assistance
 
-Tools
-Appearance hide
-Text
-
-Small
-
-Standard
-
-Large
-Width
-
-Standard
-
-Wide
-Color (beta)
-
-Automatic
-
-Light
-
-Dark
-From Wikipedia, the free encyclopedia
-
-This article needs additional citations for verification. Please help improve this article by adding citations to reliable sources. Unsourced material may be challenged and removed.
+American Sign Language grammar
 Find sources: "American Sign Language grammar" – news · newspapers · books · scholar · JSTOR (August 2009) (Learn how and when to remove this message)
 The grammar of American Sign Language (ASL) has rules just like any other sign language or spoken language. ASL grammar studies date back to William Stokoe in the 1960s.[1][2] This sign language consists of parameters that determine many other grammar rules. Typical word structure in ASL conforms to the SVO/OSV and topic-comment form, supplemented by a noun-adjective order and time-sequenced ordering of clauses. ASL has large CP and DP syntax systems, and also doesn't contain many conjunctions like some other languages do.
 
@@ -745,6 +716,10 @@ The manual sign for the conjunction but is similar to the sign for different. It
 English: I like to swim, but I don't like to run.
 ASL/PSE: SWIM I LIKE, BUT RUN I LIKE-NOT
 ASL: SWIM I LIKE, [shoulder shift] RUN I LIKE-NOT
+
+// End of Grammar help. 
+
+Now we add some additional rules that you must also follow.
                                   
 
 Important Guidelines:
@@ -755,6 +730,9 @@ Important Guidelines:
 - If there is no data for a field (like sentiment segments), you can return an empty array or a suitable default.
 - Do not hallucinate or make up data that is not present in the transcript. Do not invent timestamps or entities. Do not add any additional information that is not present in the transcript.
 - Do not add any additional fields or keys that are not mentioned in the instructions.
+- Do not add text before the json - begin your output with the first json open bracket. i.e '{' - do not add ``` json or formatting.
+- Remember to include the ASL gloss translations for every sentence. 
+- For any segments i.e 00.12.02 --> 00.13.22 do not include the arrow - instead add fields to the json part for start_time and end_time. E.g {start_time: 00.12.02}{end_time: 00.12.02} - if any segment you would place a time stamp - you must include both a start and end timestamp in this format. This is so that the json is consistent for every sample. 
 
 
 Please confirm you understand these instructions by providing the structured JSON based on the transcript I will now provide.
