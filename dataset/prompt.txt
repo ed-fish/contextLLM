@@ -2,13 +2,15 @@ You are a data extraction assistant and an expert in linguistics and semantics. 
 Your goal is to produce a JSON object capturing the following information from the transcript:
 
 1. metadata:
-   - video_id: (a placeholder or ID)
+   - video_id: (The ID provided before the instruction above)
    - title: (a descriptive title for the video)
    - channel_name: (if available)
    - publish_date: (if available)
    - duration: (calculate using first and last time stamp in the transcript.)
 
 2. transcript_extracted_data:
+   2.1 The actual transcript in a usable json format with the keys, ID (0-n where n is the number of captions), begin timestamp, end timestamp, caption. You will also include a gloss translation here but wait for further instructions on how to process these. 
+   2.2 All following segments when referencing segments or timestamps should use the ID as well as the timestamp so it's easier to reference in code. 
    a) entities:
       - persons: Include name, role/alias, and any timestamps they are mentioned.
       - locations: City, state, country, or known references in the transcript. 
@@ -19,16 +21,14 @@ Your goal is to produce a JSON object capturing the following information from t
                   (e.g., 'HB2944 requires ASL interpreters'). 
                   Include timestamps or context snippets.
     d) temporal_data: Include information about dates, durations, or references to times (e.g., '2021,' 'two weeks', '4 oclock') and where they appear in the video.
-    e) sentiment_analysis: 
-       - overall sentiment (positive, negative, neutral, etc.) 
-       - For each text segment provide sentiment or emotional tone.
-    f) key_phrases: Important terms/phrases extracted from the transcript, with any relevance or importance score.
 
 3. A 100 word summary of what the video is about. 
 4. A 50 word summary of what the video is about.
 5. A 10 word summary of what the videos is about.
 
-6. For part of the transcript generate a Gloss translation in American Sign Language. To help you below I have provided context from a wikipedia article on ASL grammar. You must include the glosses in the data you provide. 
+6. Generate a Gloss translation in American Sign Language of the captions as outlined in 2.1 and add as a key to the 2.1 - do not add an additional key here called gloss translation just add to 2.1. To generate this Gloss translation you must follow the rules as outlined below. you should generate 3 versions of the gloss. The first should strictly follow the rules in the wikipedia article below. The second you can use your own judgement based on your understanding of ASL grammar and the context of the vidoe, The third you should combine the previous two examples you generated, the previous and next sentences, and then a translation do not include how you worked this out - just the translation.
+
+7. Generate a question and multiple answer pair for every caption. It should have one question and three answers of multiple choice.
 
 // ASL Grammar assistance
 
@@ -73,7 +73,7 @@ LETTER
 JOHN
 
  
-
+ive reinforcement learning model. For each caption you should generate three questions each with three possible answers and then the actual answer ID - ensure a random distribution of the answer ID's and a reference to which caption the information exists within.
 WRITE
 
           th
@@ -733,7 +733,970 @@ Important Guidelines:
 - Do not add text before the json - begin your output with the first json open bracket. i.e '{' - do not add ``` json or formatting.
 - Remember to include the ASL gloss translations for every sentence. 
 - For any segments i.e 00.12.02 --> 00.13.22 do not include the arrow - instead add fields to the json part for start_time and end_time. E.g {start_time: 00.12.02}{end_time: 00.12.02} - if any segment you would place a time stamp - you must include both a start and end timestamp in this format. This is so that the json is consistent for every sample. 
+- The output MUST BE VALID JSON!! that means no formatting - just raw json that can be validated without additional edits. 
 
 
-Please confirm you understand these instructions by providing the structured JSON based on the transcript I will now provide.
-                                  
+As an example output that the output must adhere to with respect to formatting and keys that MUST BE ADHEARED TO - this must be consistent between runs of the same query. 
+
+{
+  "metadata": {
+    "video_id": "9S9babHPEVY",
+    "title": "Massive Power Outage at Atlanta Airport Strands Thousands",
+    "channel_name": "unknown",
+    "publish_date": "unknown",
+    "duration": "00:01:37.060"
+  },
+  "transcript_extracted_data": {
+    "transcript": [
+      {
+        "id": 0,
+        "start_time": "00:00:01.500",
+        "end_time": "00:00:08.080",
+        "caption": "Thousands of passengers were stranded at Atlanta's Hartsfield-Jackson International airport today",
+        "gloss": {
+          "strict_gloss": "THOUSANDS PASSENGER STRANDED ATLANTA HARTFIELD-JACKSON INTERNATIONAL AIRPORT TODAY",
+          "contextual_gloss": "PASSENGER THOUSANDS STRANDED ATLANTA AIRPORT HARTFIELD-JACKSON INTERNATIONAL TODAY",
+          "combined_gloss": "PASSENGER MANY THOUSANDS STRANDED ATLANTA HARTFIELD-JACKSON INTERNATIONAL AIRPORT TODAY"
+        }
+      },
+      {
+        "id": 1,
+        "start_time": "00:00:08.080",
+        "end_time": "00:00:13.660",
+        "caption": "due to a massive power outage.",
+        "gloss": {
+          "strict_gloss": "REASON MASSIVE POWER OUTAGE",
+          "contextual_gloss": "BECAUSE POWER OUTAGE MASSIVE",
+          "combined_gloss": "BECAUSE POWER OUTAGE MASSIVE"
+        }
+      },
+      {
+        "id": 2,
+        "start_time": "00:00:13.700",
+        "end_time": "00:00:22.560",
+        "caption": "The Federal Aviation Administration (FAA)  stopped all planes from landing and",
+        "gloss": {
+          "strict_gloss": "FEDERAL AVIATION ADMINISTRATION FAA STOP PLANE ALL LANDING AND",
+          "contextual_gloss": "FAA FEDERAL AVIATION ADMINISTRATION STOP ALL PLANES LANDING AND",
+          "combined_gloss": "FAA FEDERAL AVIATION ADMINISTRATION PLANE ALL STOP LANDING AND"
+        }
+      },
+      {
+        "id": 3,
+        "start_time": "00:00:22.560",
+        "end_time": "00:00:24.900",
+        "caption": "grounded departing planes at their gates.",
+        "gloss": {
+          "strict_gloss": "GROUND DEPART PLANE GATE AT",
+          "contextual_gloss": "DEPARTING PLANES GROUNDED GATE AT",
+          "combined_gloss": "DEPARTING PLANES GROUND GATE GROUNDED"
+        }
+      },
+      {
+        "id": 4,
+        "start_time": "00:00:24.960",
+        "end_time": "00:00:33.940",
+        "caption": "Incoming international flights were diverted to other airports.",
+        "gloss": {
+          "strict_gloss": "INCOMING INTERNATIONAL FLIGHT DIVERT OTHER AIRPORT TO",
+          "contextual_gloss": "INTERNATIONAL FLIGHTS INCOMING DIVERTED AIRPORTS OTHER TO",
+          "combined_gloss": "INTERNATIONAL FLIGHTS INCOMING AIRPORT OTHER DIVERTED"
+        }
+      },
+      {
+        "id": 5,
+        "start_time": "00:00:33.940",
+        "end_time": "00:00:43.000",
+        "caption": "There were a few backup generators operating but that only provided dim sources of light.",
+        "gloss": {
+          "strict_gloss": "EXIST FEW BACKUP GENERATOR OPERATE BUT THAT ONLY PROVIDE DIM SOURCE LIGHT",
+          "contextual_gloss": "BACKUP GENERATORS FEW OPERATING BUT ONLY DIM LIGHT SOURCE PROVIDED",
+          "combined_gloss": "BACKUP GENERATORS FEW OPERATING BUT ONLY DIM LIGHT SOURCE PROVIDED"
+        }
+      },
+      {
+        "id": 6,
+        "start_time": "00:00:43.040",
+        "end_time": "00:00:47.000",
+        "caption": "There were reports of people having a hard time making calls on their cell phones because",
+        "gloss": {
+          "strict_gloss": "EXIST REPORT PEOPLE HAVE HARD TIME MAKE CALL CELL PHONE ON BECAUSE",
+          "contextual_gloss": "REPORTS PEOPLE HAVE HARD TIME MAKE CALLS CELL PHONES BECAUSE",
+          "combined_gloss": "REPORTS PEOPLE HAVE HARD TIME CELL PHONES CALLS MAKE BECAUSE"
+        }
+      },
+      {
+        "id": 7,
+        "start_time": "00:00:47.040",
+        "end_time": "00:00:53.420",
+        "caption": "so many people were trying to make calls at the same time.",
+        "gloss": {
+          "strict_gloss": "SO MANY PEOPLE TRY MAKE CALL SAME TIME AT",
+          "contextual_gloss": "PEOPLE MANY TRYING MAKE CALLS TIME SAME AT",
+          "combined_gloss": "PEOPLE MANY SAME TIME CALLS MAKE TRYING"
+        }
+      },
+      {
+        "id": 8,
+        "start_time": "00:00:53.420",
+        "end_time": "00:00:59.520",
+        "caption": "Power crews worked feverishly to restore power.",
+        "gloss": {
+          "strict_gloss": "POWER CREW WORK FEVERISH RESTORE POWER",
+          "contextual_gloss": "POWER CREWS WORKED FEVERISHLY RESTORE POWER",
+          "combined_gloss": "POWER CREWS FEVERISHLY WORKED POWER RESTORE"
+        }
+      },
+      {
+        "id": 9,
+        "start_time": "00:00:59.560",
+        "end_time": "00:01:07.160",
+        "caption": "Hartsfield Jackson is the busiest airport in the world.",
+        "gloss": {
+          "strict_gloss": "HARTFIELD JACKSON BE BUSY AIRPORT WORLD IN",
+          "contextual_gloss": "HARTFIELD-JACKSON BUSIEST AIRPORT WORLD IN",
+          "combined_gloss": "HARTFIELD-JACKSON WORLD BUSIEST AIRPORT"
+        }
+      },
+      {
+        "id": 10,
+        "start_time": "00:01:07.200",
+        "end_time": "00:01:16.280",
+        "caption": "It handles about 2,500 flights and roughly 275,000 passengers daily.",
+        "gloss": {
+          "strict_gloss": "IT HANDLE ABOUT 2500 FLIGHT AND ROUGHLY 275000 PASSENGER DAILY",
+          "contextual_gloss": "HANDLE FLIGHTS ABOUT 2500 PASSENGERS ROUGHLY 275000 DAILY",
+          "combined_gloss": "FLIGHTS 2500 APPROXIMATELY PASSENGERS 275000 DAILY HANDLE"
+        }
+      },
+      {
+        "id": 11,
+        "start_time": "00:01:16.280",
+        "end_time": "00:01:23.360",
+        "caption": "Aviation officials say a power outage this size at this airport will have ripple effects",
+        "gloss": {
+          "strict_gloss": "AVIATION OFFICIAL SAY POWER OUTAGE THIS SIZE THIS AIRPORT WILL HAVE RIPPLE EFFECT",
+          "contextual_gloss": "AVIATION OFFICIALS SAY POWER OUTAGE SIZE THIS AIRPORT RIPPLE EFFECTS WILL HAVE",
+          "combined_gloss": "AVIATION OFFICIALS SAY POWER OUTAGE THIS SIZE AIRPORT THIS RIPPLE EFFECTS WILL HAVE"
+        }
+      },
+      {
+        "id": 12,
+        "start_time": "00:01:23.360",
+        "end_time": "00:01:32.200",
+        "caption": "on air traffic all over the country and the world.",
+        "gloss": {
+          "strict_gloss": "ON AIR TRAFFIC ALL OVER COUNTRY AND WORLD",
+          "contextual_gloss": "AIR TRAFFIC ALL OVER COUNTRY WORLD ON",
+          "combined_gloss": "AIR TRAFFIC COUNTRY WORLD ALL OVER"
+        }
+      },
+      {
+        "id": 13,
+        "start_time": "00:01:32.200",
+        "end_time": "00:01:38.560",
+        "caption": "Airport officials have not yet given a cause for the fire.",
+        "gloss": {
+          "strict_gloss": "AIRPORT OFFICIAL HAVE NOT YET GIVE CAUSE FIRE FOR",
+          "contextual_gloss": "AIRPORT OFFICIALS NOT YET GIVEN CAUSE FIRE FOR",
+          "combined_gloss": "AIRPORT OFFICIALS FIRE CAUSE NOT YET GIVEN"
+        }
+      }
+    ],
+    "entities": {
+      "persons": [],
+      "locations": [
+        {
+          "name": "Atlanta",
+          "type": "city",
+          "mentions": [
+            {
+              "segment_id": 0,
+              "start_time": "00:00:01.500",
+              "end_time": "00:00:08.080"
+            }
+          ]
+        },
+        {
+          "name": "Hartsfield-Jackson International airport",
+          "type": "airport",
+          "mentions": [
+            {
+              "segment_id": 0,
+              "start_time": "00:00:01.500",
+              "end_time": "00:00:08.080"
+            },
+            {
+              "segment_id": 9,
+              "start_time": "00:00:59.560",
+              "end_time": "00:01:07.160"
+            },
+            {
+              "segment_id": 11,
+              "start_time": "00:01:16.280",
+              "end_time": "00:01:23.360"
+            }
+          ]
+        },
+        {
+          "name": "country",
+          "type": "country",
+          "mentions": [
+            {
+              "segment_id": 12,
+              "start_time": "00:01:23.360",
+              "end_time": "00:01:32.200"
+            }
+          ]
+        },
+        {
+          "name": "world",
+          "type": "world",
+          "mentions": [
+            {
+              "segment_id": 9,
+              "start_time": "00:00:59.560",
+              "end_time": "00:01:07.160"
+            },
+            {
+              "segment_id": 12,
+              "start_time": "00:01:23.360",
+              "end_time": "00:01:32.200"
+            }
+          ]
+        },
+        {
+          "name": "other airports",
+          "type": "airport",
+          "mentions": [
+            {
+              "segment_id": 4,
+              "start_time": "00:00:24.960",
+              "end_time": "00:00:33.940"
+            }
+          ]
+        }
+      ]
+    },
+    "topics": [
+      "Airport Power Outage",
+      "Flight Disruption",
+      "Travel",
+      "Transportation",
+      "Aviation"
+    ],
+    "relations": [
+      {
+        "subject": "passengers",
+        "predicate": "were stranded at",
+        "object": "Atlanta's Hartsfield-Jackson International airport",
+        "context": "Thousands of passengers were stranded at Atlanta's Hartsfield-Jackson International airport today",
+        "mentions": [
+          {
+            "segment_id": 0,
+            "start_time": "00:00:01.500",
+            "end_time": "00:00:08.080"
+          }
+        ]
+      },
+      {
+        "subject": "power outage",
+        "predicate": "caused",
+        "object": "disruption",
+        "context": "due to a massive power outage.",
+        "mentions": [
+          {
+            "segment_id": 1,
+            "start_time": "00:00:08.080",
+            "end_time": "00:00:13.660"
+          }
+        ]
+      },
+      {
+        "subject": "Federal Aviation Administration (FAA)",
+        "predicate": "stopped",
+        "object": "all planes from landing",
+        "context": "The Federal Aviation Administration (FAA)  stopped all planes from landing",
+        "mentions": [
+          {
+            "segment_id": 2,
+            "start_time": "00:00:13.700",
+            "end_time": "00:00:22.560"
+          }
+        ]
+      },
+      {
+        "subject": "FAA",
+        "predicate": "grounded",
+        "object": "departing planes",
+        "context": "grounded departing planes at their gates.",
+        "mentions": [
+          {
+            "segment_id": 3,
+            "start_time": "00:00:22.560",
+            "end_time": "00:00:24.900"
+          }
+        ]
+      },
+      {
+        "subject": "international flights",
+        "predicate": "were diverted to",
+        "object": "other airports",
+        "context": "Incoming international flights were diverted to other airports.",
+        "mentions": [
+          {
+            "segment_id": 4,
+            "start_time": "00:00:24.960",
+            "end_time": "00:00:33.940"
+          }
+        ]
+      },
+      {
+        "subject": "backup generators",
+        "predicate": "provided",
+        "object": "dim sources of light",
+        "context": "backup generators operating but that only provided dim sources of light.",
+        "mentions": [
+          {
+            "segment_id": 5,
+            "start_time": "00:00:33.940",
+            "end_time": "00:00:43.000"
+          }
+        ]
+      },
+      {
+        "subject": "Power crews",
+        "predicate": "worked to",
+        "object": "restore power",
+        "context": "Power crews worked feverishly to restore power.",
+        "mentions": [
+          {
+            "segment_id": 8,
+            "start_time": "00:00:53.420",
+            "end_time": "00:00:59.520"
+          }
+        ]
+      },
+      {
+        "subject": "Hartsfield Jackson",
+        "predicate": "is",
+        "object": "busiest airport in the world",
+        "context": "Hartsfield Jackson is the busiest airport in the world.",
+        "mentions": [
+          {
+            "segment_id": 9,
+            "start_time": "00:00:59.560",
+            "end_time": "00:01:07.160"
+          }
+        ]
+      },
+      {
+        "subject": "airport officials",
+        "predicate": "have not given",
+        "object": "cause for the fire",
+        "context": "Airport officials have not yet given a cause for the fire.",
+        "mentions": [
+          {
+            "segment_id": 13,
+            "start_time": "00:01:32.200",
+            "end_time": "00:01:38.560"
+          }
+        ]
+      }
+    ],
+    "temporal_data": [
+      {
+        "time_expression": "today",
+        "mentions": [
+          {
+            "segment_id": 0,
+            "start_time": "00:00:01.500",
+            "end_time": "00:00:08.080"
+          }
+        ]
+      },
+      {
+        "time_expression": "daily",
+        "mentions": [
+          {
+            "segment_id": 10,
+            "start_time": "00:01:07.200",
+            "end_time": "00:01:16.280"
+          }
+        ]
+      },
+      {
+        "time_expression": "yet",
+        "mentions": [
+          {
+            "segment_id": 13,
+            "start_time": "00:01:32.200",
+            "end_time": "00:01:38.560"
+          }
+        ]
+      }
+    ],
+    "sentiment_analysis": {
+      "overall_sentiment": "negative",
+      "segment_sentiments": [
+        {
+          "segment_id": 0,
+          "sentiment": "negative",
+          "text": "Thousands of passengers were stranded at Atlanta's Hartsfield-Jackson International airport today"
+        },
+        {
+          "segment_id": 1,
+          "sentiment": "negative",
+          "text": "due to a massive power outage."
+        },
+        {
+          "segment_id": 2,
+          "sentiment": "neutral",
+          "text": "The Federal Aviation Administration (FAA)  stopped all planes from landing and"
+        },
+        {
+          "segment_id": 3,
+          "sentiment": "negative",
+          "text": "grounded departing planes at their gates."
+        },
+        {
+          "segment_id": 4,
+          "sentiment": "neutral",
+          "text": "Incoming international flights were diverted to other airports."
+        },
+        {
+          "segment_id": 5,
+          "sentiment": "neutral",
+          "text": "There were a few backup generators operating but that only provided dim sources of light."
+        },
+        {
+          "segment_id": 6,
+          "sentiment": "negative",
+          "text": "There were reports of people having a hard time making calls on their cell phones because"
+        },
+        {
+          "segment_id": 7,
+          "sentiment": "negative",
+          "text": "so many people were trying to make calls at the same time."
+        },
+        {
+          "segment_id": 8,
+          "sentiment": "neutral",
+          "text": "Power crews worked feverishly to restore power."
+        },
+        {
+          "segment_id": 9,
+          "sentiment": "neutral",
+          "text": "Hartsfield Jackson is the busiest airport in the world."
+        },
+        {
+          "segment_id": 10,
+          "sentiment": "neutral",
+          "text": "It handles about 2,500 flights and roughly 275,000 passengers daily."
+        },
+        {
+          "segment_id": 11,
+          "sentiment": "neutral",
+          "text": "Aviation officials say a power outage this size at this airport will have ripple effects"
+        },
+        {
+          "segment_id": 12,
+          "sentiment": "negative",
+          "text": "on air traffic all over the country and the world."
+        },
+        {
+          "segment_id": 13,
+          "sentiment": "neutral",
+          "text": "Airport officials have not yet given a cause for the fire."
+        }
+      ]
+    },
+    "key_phrases": [
+      {
+        "phrase": "power outage",
+        "relevance_score": 0.9
+      },
+      {
+        "phrase": "stranded passengers",
+        "relevance_score": 0.8
+      },
+      {
+        "phrase": "airport disruption",
+        "relevance_score": 0.7
+      },
+      {
+        "phrase": "flight diversions",
+        "relevance_score": 0.6
+      },
+      {
+        "phrase": "backup generators",
+        "relevance_score": 0.5
+      },
+      {
+        "phrase": "restore power",
+        "relevance_score": 0.6
+      },
+      {
+        "phrase": "busiest airport",
+        "relevance_score": 0.7
+      },
+      {
+        "phrase": "ripple effects",
+        "relevance_score": 0.6
+      }
+    ]
+  },
+  "summary_100_words": "A massive power outage at Atlanta's Hartsfield-Jackson International Airport stranded thousands of passengers today. The FAA halted all landings and grounded departing flights, diverting international arrivals. Backup generators provided limited light. Cell phone communication was difficult due to network congestion. Power crews worked to restore electricity at the world's busiest airport, which handles 2,500 daily flights and 275,000 passengers. Aviation officials warned of widespread air traffic disruptions across the country and globally. Airport officials are yet to determine the cause of the outage.",
+  "summary_50_words": "Thousands of passengers were stranded at Atlanta Airport due to a massive power outage. The FAA stopped flights landing and departing, diverting international flights. Backup generators offered dim light, and cell service was strained. Power crews worked to restore power at the world's busiest airport, causing global air traffic disruptions. The cause of the outage is still unknown.",
+  "summary_10_words": "Atlanta airport power outage strands thousands, disrupting global air traffic.",
+  "qa_pairs": [
+    {
+      "caption_id": 0,
+      "questions": [
+        {
+          "question": "Where were thousands of passengers stranded today?",
+          "answers": [
+            "Chicago O'Hare Airport",
+            "Atlanta's Hartsfield-Jackson International Airport",
+            "Los Angeles International Airport"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What large number of people were affected at the airport?",
+          "answers": [
+            "Hundreds",
+            "Millions",
+            "Thousands"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "What city is Hartsfield-Jackson International airport located in?",
+          "answers": [
+            "New York",
+            "Atlanta",
+            "Dallas"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 1,
+      "questions": [
+        {
+          "question": "What caused the passenger stranding?",
+          "answers": [
+            "Severe weather",
+            "Massive power outage",
+            "Terrorist attack"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "Was the power outage described as minor or massive?",
+          "answers": [
+            "Minor",
+            "Massive",
+            "Insignificant"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What is the direct cause of the airport issues?",
+          "answers": [
+            "System Glitch",
+            "Power Surge",
+            "Power Outage"
+          ],
+          "correct_answer_id": 3
+        }
+      ]
+    },
+    {
+      "caption_id": 2,
+      "questions": [
+        {
+          "question": "Which agency stopped planes from landing?",
+          "answers": [
+            "TSA",
+            "FBI",
+            "FAA"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "What action did the FAA take regarding planes?",
+          "answers": [
+            "Allowed all landings",
+            "Stopped all landings",
+            "Only stopped international landings"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What kind of planes were stopped from landing?",
+          "answers": [
+            "Some planes",
+            "No planes",
+            "All planes"
+          ],
+          "correct_answer_id": 3
+        }
+      ]
+    },
+    {
+      "caption_id": 3,
+      "questions": [
+        {
+          "question": "What did the FAA do to departing planes?",
+          "answers": [
+            "Grounded them",
+            "Allowed them to depart",
+            "Delayed them slightly"
+          ],
+          "correct_answer_id": 1
+        },
+        {
+          "question": "Where were departing planes grounded?",
+          "answers": [
+            "On the runway",
+            "At their gates",
+            "In hangars"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "Which planes were grounded?",
+          "answers": [
+            "Landing planes",
+            "Departing planes",
+            "All planes"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 4,
+      "questions": [
+        {
+          "question": "What type of flights were diverted?",
+          "answers": [
+            "Domestic flights",
+            "International flights",
+            "All flights"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "Where were international flights diverted to?",
+          "answers": [
+            "Other airports",
+            "Atlanta Airport",
+            "Their origin airports"
+          ],
+          "correct_answer_id": 1
+        },
+        {
+          "question": "What was the direction of the diverted flights?",
+          "answers": [
+            "Incoming",
+            "Outgoing",
+            "Both Incoming and Outgoing"
+          ],
+          "correct_answer_id": 1
+        }
+      ]
+    },
+    {
+      "caption_id": 5,
+      "questions": [
+        {
+          "question": "Were backup generators operating?",
+          "answers": [
+            "No",
+            "Yes",
+            "Partially"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What kind of light did the backup generators provide?",
+          "answers": [
+            "Bright light",
+            "Dim light",
+            "No light"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What was the source of light during the power outage?",
+          "answers": [
+            "Street lights",
+            "Backup generators",
+            "Car headlights"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 6,
+      "questions": [
+        {
+          "question": "What difficulty did people report having?",
+          "answers": [
+            "Making calls on cell phones",
+            "Finding food",
+            "Getting information"
+          ],
+          "correct_answer_id": 1
+        },
+        {
+          "question": "Which device were people having trouble using?",
+          "answers": [
+            "Landline phones",
+            "Radios",
+            "Cell phones"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "What action were people having trouble with on their phones?",
+          "answers": [
+            "Playing games",
+            "Making calls",
+            "Texting"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 7,
+      "questions": [
+        {
+          "question": "Why were people having trouble making calls?",
+          "answers": [
+            "Cell towers were down",
+            "So many people were trying to call",
+            "Bad weather"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What was the volume of people trying to make calls?",
+          "answers": [
+            "Few people",
+            "Some people",
+            "So many people"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "What was occurring at the same time as the call issues?",
+          "answers": [
+            "Power restoration",
+            "People trying to make calls",
+            "Flights departing"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 8,
+      "questions": [
+        {
+          "question": "Who worked to restore power?",
+          "answers": [
+            "Police",
+            "Firefighters",
+            "Power crews"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "How did power crews work?",
+          "answers": [
+            "Slowly",
+            "Feverishly",
+            "Calmly"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What were the power crews trying to do?",
+          "answers": [
+            "Improve security",
+            "Restore power",
+            "Help passengers"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 9,
+      "questions": [
+        {
+          "question": "What is Hartsfield-Jackson known as?",
+          "answers": [
+            "The newest airport",
+            "The busiest airport in the world",
+            "The smallest airport"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "Where is Hartsfield-Jackson's ranking in terms of airport traffic?",
+          "answers": [
+            "Regionally busy",
+            "Nationally busy",
+            "Busiest in the world"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "In what geographical scale is Hartsfield-Jackson the busiest airport?",
+          "answers": [
+            "City",
+            "Country",
+            "World"
+          ],
+          "correct_answer_id": 3
+        }
+      ]
+    },
+    {
+      "caption_id": 10,
+      "questions": [
+        {
+          "question": "Approximately how many flights does the airport handle daily?",
+          "answers": [
+            "250",
+            "2,500",
+            "25,000"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "Roughly how many passengers does it handle daily?",
+          "answers": [
+            "27,500",
+            "275,000",
+            "2,750,000"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What is the time frame for the passenger and flight handling numbers?",
+          "answers": [
+            "Hourly",
+            "Daily",
+            "Weekly"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 11,
+      "questions": [
+        {
+          "question": "Who predicted ripple effects from the outage?",
+          "answers": [
+            "Passengers",
+            "Aviation officials",
+            "Power crews"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What kind of effects are expected from the power outage?",
+          "answers": [
+            "Positive effects",
+            "Ripple effects",
+            "No effects"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What size of power outage is expected to have ripple effects?",
+          "answers": [
+            "Small",
+            "This size",
+            "Any size"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 12,
+      "questions": [
+        {
+          "question": "Where will the air traffic ripple effects be felt?",
+          "answers": [
+            "Only at the airport",
+            "Only in Atlanta",
+            "Country and world"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "What geographic areas are mentioned as being affected?",
+          "answers": [
+            "City and state",
+            "State and region",
+            "Country and world"
+          ],
+          "correct_answer_id": 3
+        },
+        {
+          "question": "What is affected all over the country and world?",
+          "answers": [
+            "Road traffic",
+            "Air traffic",
+            "Train traffic"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    },
+    {
+      "caption_id": 13,
+      "questions": [
+        {
+          "question": "Have airport officials given a cause for the fire yet?",
+          "answers": [
+            "Yes",
+            "No",
+            "Maybe"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "What are airport officials yet to give?",
+          "answers": [
+            "An apology",
+            "A cause for the fire",
+            "Compensation"
+          ],
+          "correct_answer_id": 2
+        },
+        {
+          "question": "Who has not yet given a cause for the fire?",
+          "answers": [
+            "Power crews",
+            "Airport officials",
+            "FAA"
+          ],
+          "correct_answer_id": 2
+        }
+      ]
+    }
+  ]
+}
