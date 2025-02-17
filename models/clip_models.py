@@ -388,14 +388,14 @@ class ImageCLIP(nn.Module):
         post_params = {
         "in_dim": 1024,
         "hidden_dim": 300,
-        "num_classes": 2300,
+        "num_classes": 9806,
         "dropout": 0.2,
         "class_temperature": 0.1,
         "time_temperature": 0.1,
         "dynamic_time_temperatures": False,
         "dynamic_class_temperatures": False,
-        "emb_lang": "de",
-        "emb_pkl_dir": f"data/processed_words.phx_pkl",
+        "emb_lang": "en",
+        "emb_pkl_dir": f"data/ytsl/processed_words.pkl",
         "trainable_emb": True,
     }
         self.head_model = HeadModel(**post_params)

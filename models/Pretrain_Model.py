@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 import os
 import wandb
 from collections import OrderedDict
-from models.utils import KLLoss, PG_Loss
+from models.utils import KLLoss, PG_Loss, PG_FocalLossProb
 from models.clip_models import SLRCLIP
 import yaml
 
@@ -23,12 +23,14 @@ class PreTrainModel(pl.LightningModule):
         #################Set the Optimizer####################
         self.lr = lr
         criterion = KLLoss()
-        pg_criterion = PG_Loss()
+        # pg_criterion = PG_Loss()
+        pg_criterion = PG_FocalLossProb()
         self.loss_img = criterion
         self.loss_txt = criterion
         self.loss_pg = pg_criterion
         ######################Prompts#######################
-        self.landa = 1.0
+        self.landa = 0.5
+
     def forward(self, samples):
         src_input, tgt_input = samples
         return self.model(src_input, tgt_input)
@@ -40,6 +42,7 @@ class PreTrainModel(pl.LightningModule):
 
     def training_step(self, input_batch, batch_idx):
         batch, psp_ground_truth = input_batch[:-1], input_batch[-1]
+
         logits_per_image, logits_per_text, clip_ground_truth, psp_logits = self(batch)
         loss_imgs = self.loss_img(logits_per_image, clip_ground_truth)
         loss_texts = self.loss_txt(logits_per_text, clip_ground_truth)

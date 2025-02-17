@@ -192,25 +192,70 @@ import torch.nn as nn
 class PG_Loss(nn.Module):
     def __init__(self):
         super().__init__()
-        self.bce_loss_fn = torch.nn.BCEWithLogitsLoss(reduction="none")
+        # We use BCELoss with reduction='none', so we can sum manually
+        # at the end. That helps when you want to accumulate gradients.
+        self.bce_loss_fn = nn.BCELoss(reduction="none")
 
     def forward(self, src, tgt):
-        # if isinstance(self.src_name, tuple):
-        #     src = y_pred
-        #     for mn in self.src_name:
-        #         src = src[mn]
-        # else:
-        #     src = y_pred[self.src_name]
-        # tgt = target[self.tgt_name]
+        """
+        Args:
+          src: shape (batch_size, vocab_size), in [0,1].
+               e.g. probabilities after some row/col softmax or sigmoid.
+          tgt: a list (length=batch_size) of lists-of-indices that should be 1.0 
+               for each sample. For example, tgt[i] = [4, 9] => those positions are 1.0,
+               others are 0.0 in the i-th row.
 
-        gloss_targets = torch.zeros(
-            src.shape[0], src.shape[-1], dtype=src.dtype, device=src.device
-        )
-        for i, t in enumerate(tgt):
-            for t_i in t:
-                gloss_targets[i, t_i] = 1.0
+        Returns:
+          A single scalar (float) summing the losses across the batch. 
+          (Hence, it grows w/ batch size.)
+        """
+        # If using autocast for the rest of the model, disable it here to avoid "unsafe to autocast" in BCELoss
+        with torch.cuda.amp.autocast(enabled=False):
+            batch_size, vocab_size = src.shape
+            # 1) Build the (batch_size, vocab_size) target
+            gloss_targets = torch.zeros(batch_size, vocab_size, dtype=torch.float32, device=src.device)
+            for i, token_list in enumerate(tgt):
+                for token_id in token_list:
+                    gloss_targets[i, token_id] = 1.0
 
-        loss = self.bce_loss_fn(torch.clamp(src, 1e-8, 1 - 1e-8), gloss_targets)
-        # loss = self.bce_loss_fn(src, gloss_targets)
+            # 2) Clamp preds => avoid exact 0 or 1
+            preds = torch.clamp(src.float(), 1e-8, 1.0 - 1e-8)
+            
+            # 3) BCELoss with "none"
+            per_elem_loss = self.bce_loss_fn(preds, gloss_targets)  # shape => (batch_size, vocab_size)
 
-        return loss.mean()
+            # 4) Sum over all elements => total scalar
+            # If you're accumulating gradients, using sum means the total gradient scale 
+            # grows with batch size or accumulation steps, which may be desired.
+            return per_elem_loss.sum() 
+        
+
+
+class PG_FocalLossProb(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction="sum"):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, src, tgt):
+        with torch.cuda.amp.autocast(enabled=False):
+            batch_size, vocab_size = src.shape
+            gloss_targets = torch.zeros(batch_size, vocab_size, dtype=torch.float32, device=src.device)
+            for i, token_list in enumerate(tgt):
+                for token_id in token_list:
+                    gloss_targets[i, token_id] = 1.0
+
+            prob = torch.clamp(src.float(), 1e-8, 1 - 1e-8)
+            bce = - (gloss_targets * torch.log(prob) + (1 - gloss_targets) * torch.log(1 - prob))
+            p_t = prob * gloss_targets + (1.0 - prob) * (1.0 - gloss_targets)
+            alpha_t = self.alpha * gloss_targets + (1.0 - self.alpha) * (1.0 - gloss_targets)
+            focal_weight = alpha_t * (1.0 - p_t).pow(self.gamma)
+            loss = focal_weight * bce
+
+            if self.reduction == "sum":
+                return loss.sum()
+            elif self.reduction == "mean":
+                return loss.mean()
+            else:
+                return loss
