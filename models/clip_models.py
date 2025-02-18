@@ -388,14 +388,14 @@ class ImageCLIP(nn.Module):
         post_params = {
         "in_dim": 1024,
         "hidden_dim": 300,
-        "num_classes": 9806,
+        "num_classes": 30520,
         "dropout": 0.2,
         "class_temperature": 0.1,
         "time_temperature": 0.1,
         "dynamic_time_temperatures": False,
         "dynamic_class_temperatures": False,
         "emb_lang": "en",
-        "emb_pkl_dir": f"data/ytsl/processed_words.pkl",
+        "emb_pkl_dir": f"data/combined_files/combined_vocab.pkl",
         "trainable_emb": True,
     }
         self.head_model = HeadModel(**post_params)
@@ -579,7 +579,7 @@ class gloss_free_model(nn.Module):
                     decoder_attention_mask = tgt_input['attention_mask'].cuda(),
                     return_dict = True,
                     )
-        return out['logits']
+        return out['logits'], out['loss']
     def generate(self, src_input, max_new_tokens, num_beams, decoder_start_token_id ):
         inputs_embeds, attention_mask = self.share_forward(src_input)
 

@@ -6,9 +6,9 @@ from transformers import MBartForConditionalGeneration, MBartTokenizer, MBartCon
 from hftrim.ModelTrimmers import MBartTrimmer
 from hftrim.TokenizerTrimmer import TokenizerTrimmer
 
-raw_data = '/home/ef0036/Projects/contextLLM/data/ytsl/processed_words.pkl'
-save_trim_dir = 'pretrain_models/MBart_trimmed'
-save_mytran_dir = 'pretrain_models/mytran'
+raw_data = '/home/ef0036/Projects/contextLLM/data/combined_files/combined_vocab.pkl'
+save_trim_dir = 'pretrain_models/MBart_trimmed_yt_h2s'
+save_mytran_dir = 'pretrain_models/mytran_yt_h2s'
 
 # 1) Load text data
 data = []
@@ -18,6 +18,7 @@ with open(raw_data, 'rb') as f:
     # for o in obj['dict_lem_to_id'].keys():
     #     data.extend(o)
     # currently 9805 + blank 9806
+    # shared is 30519 + blank 30520
 
 # 2) Create original tokenizer & model
 tokenizer = MBartTokenizer.from_pretrained(
