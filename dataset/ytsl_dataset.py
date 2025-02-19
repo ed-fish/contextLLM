@@ -87,6 +87,9 @@ class SignSegmentS2TDataset(Dataset):
 
         # 4) Max length for frames
         self.max_length = self.config["data"].get("max_length", 300)
+        
+        # 5) Set downsampling rate
+        self.k = self.config["data"].get("downsample_rate", 0.25)
     
     def get_downsampled_indices(self, num_frames: int, train: bool, k: float = 0.25) -> list:
         """
@@ -151,7 +154,7 @@ class SignSegmentS2TDataset(Dataset):
             num_frames = len(vr)
             stride = self.config["data"].get("frame_stride", 10)
             # indices = list(range(0, num_frames, stride))
-            indices = self.get_downsampled_indices(num_frames, self.phase == "train", k=0.25)
+            indices = self.get_downsampled_indices(num_frames, self.phase == "train", k=self.k)
             
             # Batch decode frames
             frames = vr.get_batch(indices)  # decord.NDArray (T,H,W,3)
