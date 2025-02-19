@@ -1,74 +1,70 @@
+import os
+import pickle as pkl
+import torch
 
 from transformers import MBartForConditionalGeneration, MBartTokenizer, MBartConfig
-
 from hftrim.ModelTrimmers import MBartTrimmer
-import torch
-# import utils
 from hftrim.TokenizerTrimmer import TokenizerTrimmer
-import gzip
-import pickle
-def load_dataset_file(filename):
-    with gzip.open(filename, "rb") as f:
-        loaded_object = pickle.load(f)
-        return loaded_object
 
+raw_data = '/home/ef0036/Projects/contextLLM/data/combined_files/combined_vocab.pkl'
+save_trim_dir = 'pretrain_models/MBart_trimmed_yt_h2s'
+save_mytran_dir = 'pretrain_models/mytran_yt_h2s'
 
-raw_data = load_dataset_file('data/labels.train')
-
+# 1) Load text data
 data = []
+with open(raw_data, 'rb') as f:
+    obj = pkl.load(f)
+    data = [*obj['dict_lem_to_id'].keys()]
+    # for o in obj['dict_lem_to_id'].keys():
+    #     data.extend(o)
+    # currently 9805 + blank 9806
+    # shared is 30519 + blank 30520
 
-for key,value in raw_data.items():
-    sentence = value['text']
-    # gloss = value['gloss']
-    data.append(sentence)
-    # data.append(gloss.lower())
-
-tokenizer = MBartTokenizer.from_pretrained("facebook/mbart-large-cc25", src_lang="de_DE", tgt_lang="de_DE")
+# 2) Create original tokenizer & model
+tokenizer = MBartTokenizer.from_pretrained(
+    "facebook/mbart-large-cc25",
+    src_lang="en_XX",  # For English
+    tgt_lang="en_XX"
+)
 
 model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25")
 configuration = model.config
 
-# trim tokenizer
+# 3) Trim tokenizer
 tt = TokenizerTrimmer(tokenizer)
-tt.make_vocab(data)
-tt.make_tokenizer()
+tt.make_vocab(data)        # Builds vocab from your data
+tt.make_tokenizer()        # Actually creates the "trimmed" tokenizer
 
-# trim model
+# 4) Trim model
 mt = MBartTrimmer(model, configuration, tt.trimmed_tokenizer)
 mt.make_weights(tt.trimmed_vocab_ids)
 mt.make_model()
-# print(mt.trimmed_model)
-# mt.trimmed_model.config.update({
-#     'decoder_start_token_id': tt.trimmed_tokenizer.convert_tokens_to_ids(
-#         tt.tokenizer.convert_ids_to_tokens(mt.model.config['decoder_start_token_id'])
-#     )
-# })
 
-new_tokenizer = tt.trimmed_tokenizer
-new_model = mt.trimmed_model
+# 5) Save the trimmed tokenizer + model
+trimmed_tokenizer = tt.trimmed_tokenizer
+trimmed_model = mt.trimmed_model
 
-new_tokenizer.save_pretrained('pretrain_models/MBart_trimmed')
-new_model.save_pretrained('pretrain_models/MBart_trimmed')
-# torch.save(new_model.state_dict(), 'pretrain_models/MBart_trimmed/pytorch_model.bin')
+os.makedirs(save_trim_dir, exist_ok=True)
+trimmed_tokenizer.save_pretrained(save_trim_dir)
+trimmed_model.save_pretrained(save_trim_dir)
 
+# (Optional) You could also do a direct torch.save, but save_pretrained()
+# already writes a pytorch_model.bin for you:
+# torch.save(trimmed_model.state_dict(), os.path.join(save_trim_dir, 'pytorch_model.bin'))
 
-## mytran_model
-configuration = MBartConfig.from_pretrained('pretrain_models/mytran/config.json')
-configuration.vocab_size = new_model.config.vocab_size
-mytran_model = MBartForConditionalGeneration._from_config(config=configuration)
-mytran_model.model.shared = new_model.model.shared
+# 6) Create "mytran_model" from the trimmed model
+#    If you want the *entire* trimmed model, just reload it via from_pretrained:
+mytran_model = MBartForConditionalGeneration.from_pretrained(save_trim_dir)
 
+# 7) Save "mytran_model"
+os.makedirs(save_mytran_dir, exist_ok=True)
+mytran_model.save_pretrained(save_mytran_dir)
 
-mytran_model.save_pretrained('pretrain_models/mytran/')
-# torch.save(mytran_model.state_dict(), 'pretrain_models/mytran/pytorch_model.bin')
+# Alternatively, if you *only* wanted to copy the model embeddings or do
+# something special, you could manually copy submodules. But typically,
+# loading from_pretrained is simpler for a complete model.
 
-
-
-
-
-
-
-
-
-
-
+print("Trimming complete. New tokenizer & model are saved in:")
+print(f"   {save_trim_dir}")
+print("The same trimmed model also saved as 'mytran_model' in:")
+print(f"   {save_mytran_dir}")
