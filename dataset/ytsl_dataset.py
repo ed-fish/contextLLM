@@ -11,10 +11,12 @@ import argparse
 import yaml
 from transformers import MBartTokenizer
 
+
 # ----------------------------------------------------------------------------
 # 1) DATASET
 # ----------------------------------------------------------------------------
 
+SI_IDX,PAD_IDX, UNK_IDX,BOS_IDX, EOS_IDX = 0 ,1 ,2 ,3 ,4
 class SignSegmentS2TDataset(Dataset):
     """
     Loads a final JSON with:
@@ -27,7 +29,7 @@ class SignSegmentS2TDataset(Dataset):
 
     def __init__(
         self,
-        json_path: str,
+        json_path,
         tokenizer,        # MBart or other HF tokenizer
         config: dict,     # your YAML config
         phase="train",
@@ -43,19 +45,19 @@ class SignSegmentS2TDataset(Dataset):
         self.tokenizer = tokenizer
         self.config = config
 
-        # 1) Load the JSON
-        with open(json_path, 'r') as f:
+        # # 1) Load the JSON
+        # if self.phase == "train":
+        #     self.raw_data = merge_json_files(json_paths)
+        # else:
+        with open(json_path, 'rb') as f:
             self.raw_data = json.load(f)
 
-        if phase == "test" or phase == "val":
-            self.keys = list(self.raw_data.keys())[10000:10500]
-        else:
-            self.keys = list(self.raw_data.keys())[:10000]
+        self.keys = list(self.raw_data.keys())
 
 
         # 2) Load the pseudo-gloss dictionary (like "data/processed_words.gloss_pkl")
         # emb_pkl = self.config["data"].get("pg_pickle", "data/processed_words.gloss_pkl")
-        emb_pkl = "/home/ef0036/Projects/contextLLM/data/ytsl/processed_words.pkl"
+        emb_pkl = config["data"].get("vocab_file", "")
         if not os.path.exists(emb_pkl):
             raise FileNotFoundError(f"Pseudo-gloss pickle not found => {emb_pkl}")
 
@@ -67,19 +69,27 @@ class SignSegmentS2TDataset(Dataset):
         # 3) Basic transform pipeline
         #    If you want vidaug, random transforms, etc. you can insert them here
         #    For now, we do a simple "Resize => ToTensor => Normalize"
+
         self.data_transform = T.Compose([
-            T.Resize((self.input_size, self.input_size), interpolation=T.InterpolationMode.BILINEAR),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406],
-                        [0.229, 0.224, 0.225]),
+            T.Lambda(lambda x: x.float() / 255.0),  # Replace ToTensor()
+            T.Resize((self.input_size, self.input_size), 
+                     antialias=True),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
+
+        # self.data_transform = T.Compose([
+        #     T.Resize((self.input_size, self.input_size), interpolation=T.InterpolationMode.BILINEAR),
+        #     T.ToTensor(),
+        #     T.Normalize([0.485, 0.456, 0.406],
+        #                 [0.229, 0.224, 0.225]),
+        # ])
 
         # 4) Max length for frames
         self.max_length = self.config["data"].get("max_length", 300)
 
     def __len__(self):
         return len(self.keys)
-
+    
     def __getitem__(self, idx):
         key = self.keys[idx]
         seg_info = self.raw_data[key]
@@ -101,44 +111,39 @@ class SignSegmentS2TDataset(Dataset):
                 pg_id.append(-1)  # unknown token
 
         # D) Use decord to load frames from .mp4
-        mp4_path = seg_info.get("output_file", "")
+        filename = seg_info.get("output_file")
+        root_path = self.config["data"].get("root_dir")
+        mp4_path = os.path.join(root_path, filename)
+
         if not os.path.exists(mp4_path):
             print(f"Warning: Video path not found => {mp4_path}. Skipping sample.")
             return None
 
+
         try:
             vr = VideoReader(mp4_path, ctx=cpu(0))
+            num_frames = len(vr)
+            stride = self.config["data"].get("frame_stride", 10)
+            indices = list(range(0, num_frames, stride))
+            
+            # Batch decode frames
+            frames = vr.get_batch(indices)  # decord.NDArray (T,H,W,3)
+            frames = frames.asnumpy()  # numpy array
+            frames = torch.from_numpy(frames)  # (T,H,W,3), uint8
+            
+            # Permute to (T,C,H,W) and normalize
+            frames = frames.permute(0, 3, 1, 2)  # (T,3,H,W)
+            frames = self.data_transform(frames)  # (T,3,input_size,input_size)
+            
+            # Truncate if needed
+            if frames.shape[0] > self.max_length:
+                frames = frames[:self.max_length]
+                
         except Exception as e:
-            print(f"Warning: Error reading video {mp4_path}: {e}. Skipping sample.")
+            print(f"Error loading {mp4_path}: {e}")
             return None
 
-        num_frames = len(vr)
-        # If over max_length, just slice
-        indices = list(range(min(num_frames, self.max_length)))
-
-        frames_list = []
-        for i in indices:
-            try:
-                frame = vr[i].asnumpy()   # shape => (H,W,3)
-            except Exception as e:
-                print(f"Warning: Error decoding frame {i} in video {mp4_path}: {e}. Skipping frame.")
-                continue
-            pil_frame = Image.fromarray(frame)
-            # Possibly add random augmentations here if self.phase=='train'
-            frame_tensor = self.data_transform(pil_frame)
-            frames_list.append(frame_tensor)
-
-        if len(frames_list) == 0:
-            print(f"Warning: No frames loaded for video {mp4_path}. Skipping sample.")
-            return None
-
-        frames_tensor = torch.stack(frames_list, dim=0)  # => (T, 3, H, W)
-
-        return name_sample, frames_tensor, text_str, pg_id
-
-# ----------------------------------------------------------------------------
-# 2) COLLATE FN
-# ----------------------------------------------------------------------------
+        return name_sample, frames, text_str, pg_id
 
 def signsegment_s2t_collate_fn(batch, tokenizer, max_words=128):
     """
@@ -288,7 +293,9 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
+            persistent_workers=True,
             num_workers=self.num_workers,
+            pin_memory=True,
             collate_fn=lambda batch: signsegment_s2t_collate_fn(
                 batch, self.tokenizer, self.max_words
             )
@@ -299,7 +306,9 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
+            pin_memory=True,
             num_workers=self.num_workers,
+            persistent_workers=True,
             collate_fn=lambda batch: signsegment_s2t_collate_fn(
                 batch, self.tokenizer, self.max_words
             )
@@ -309,6 +318,7 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
+            persistent_workers=True,
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=lambda batch: signsegment_s2t_collate_fn(
