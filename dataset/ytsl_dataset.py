@@ -10,6 +10,7 @@ from PIL import Image
 import argparse
 import yaml
 from transformers import MBartTokenizer
+import numpy as np
 
 
 # ----------------------------------------------------------------------------
@@ -86,6 +87,31 @@ class SignSegmentS2TDataset(Dataset):
 
         # 4) Max length for frames
         self.max_length = self.config["data"].get("max_length", 300)
+    
+    def get_downsampled_indices(self, num_frames: int, train: bool, k: float = 0.25) -> list:
+        """
+        Get indices of selected frames after downsampling.
+        
+        Args:
+            num_frames (int): Total number of frames in the original video.
+            phase (str): "train" for random sampling, "inference" for first frame selection.
+            k (float, optional): Downsampling rate. Defaults to 0.25.
+        
+        Returns:
+            list: Indices of selected frames.
+        """
+        num_clips = int(num_frames * k)  # Total number of clips
+        clip_size = num_frames // num_clips  # Frames per clip
+        indices = []
+        
+        for i in range(num_clips):
+            start_idx = i * clip_size
+            if train:
+                indices.append(np.random.randint(start_idx, start_idx + clip_size))
+            else:
+                indices.append(start_idx)
+            
+        return indices
 
     def __len__(self):
         return len(self.keys)
@@ -124,7 +150,8 @@ class SignSegmentS2TDataset(Dataset):
             vr = VideoReader(mp4_path, ctx=cpu(0))
             num_frames = len(vr)
             stride = self.config["data"].get("frame_stride", 10)
-            indices = list(range(0, num_frames, stride))
+            # indices = list(range(0, num_frames, stride))
+            indices = self.get_downsampled_indices(num_frames, self.phase == "train", k=0.25)
             
             # Batch decode frames
             frames = vr.get_batch(indices)  # decord.NDArray (T,H,W,3)
