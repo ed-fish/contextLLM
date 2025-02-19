@@ -1,0 +1,43 @@
+BootStrap: docker
+From: pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
+
+
+%files
+    /home/ef0036/Projects/contextLLM/environment.yml /contextLLM/environment.yml
+
+%post
+    #!/bin/bash
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Install required system packages
+    apt-get update && apt-get install -y libgl1 libglib2.0-0 python3.10 build-essential pkg-config cmake git
+
+    # Update conda and create the environment from the provided environment file
+    conda update -y conda
+    conda env create --file /contextLLM/environment.yml
+
+    # Activate the conda environment and install xformers (after torch is installed)
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate contextLLM
+    export TORCH_CUDA_ARCH_LIST="8.6"
+    pip install xformers
+
+
+    # Add activation commands to the global bashrc so that interactive shells auto-activate the environment
+    echo ". /opt/conda/etc/profile.d/conda.sh" >> /etc/bash.bashrc
+    echo "conda activate contextLLM" >> /etc/bash.bashrc
+
+    # Clean up apt cache
+    apt-get clean
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    # Optionally, prepend the conda environment’s bin directory to PATH:
+    export PATH=/opt/conda/envs/contextLLM/bin:$PATH
+
+%runscript
+    #!/bin/bash
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate contextLLM
+    exec "$@"
