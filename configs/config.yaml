@@ -5,6 +5,7 @@ data:
     vocab_file: /home/ef0036/Projects/contextLLM/data/combined_files/combined_vocab.pkl
     root_dir: /home/ef0036/remote_mount/nobackup/scratch4weeks/ef0036/
     frame_stride: 16
+    downsample_rate: 0.25
     # labels: /home/sobhan/Documents/Code/MLLM/data/labels
 model:
     # I3D: /home/sobhan/Documents/Code/PSP/tmp/meinedgs_i3d.pth.tar
