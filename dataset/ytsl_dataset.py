@@ -9,28 +9,47 @@ from decord import VideoReader, cpu
 from PIL import Image
 import argparse
 import yaml
-from transformers import MBartTokenizer
 import numpy as np
+from transformers import MBartTokenizer
 
+SI_IDX, PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3, 4
 
-# ----------------------------------------------------------------------------
-# 1) DATASET
-# ----------------------------------------------------------------------------
+def merge_json_files(json_paths):
+    """
+    If you want to optionally merge multiple JSONs for training, you could do so here.
+    Not currently used, but left for reference.
+    """
+    merged_data = {}
+    for json_path in json_paths:
+        if not os.path.exists(json_path):
+            print(f"[WARN] {json_path} not found, skipping.")
+            continue
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+            for k,v in data.items():
+                if k not in merged_data:
+                    merged_data[k] = v
+                else:
+                    print(f"[WARN] Duplicate key '{k}' encountered. Keeping first occurrence.")
+    return merged_data
 
-SI_IDX,PAD_IDX, UNK_IDX,BOS_IDX, EOS_IDX = 0 ,1 ,2 ,3 ,4
 class SignSegmentS2TDataset(Dataset):
     """
     Loads a final JSON with:
       - "output_file": path to .mp4
-      - "caption" or "text": the spoken text to tokenize
+      - "caption": the spoken text to tokenize
       - "gloss": entire pseudo-gloss string
-    Also loads a processed_words.*.pkl to map each token in 'gloss' -> ID list.
-    Returns (name_sample, frames_tensor, text_str, pg_ids).
+      - "topics": list of topic strings (only if keywords_proj = True)
+    Also loads:
+      - processed_words.pkl for gloss tokens
+      - processed_topics.pkl for topic tokens, only if keywords_proj = True
+
+    Returns (name_sample, frames_tensor, text_str, pg_id, topic_ids OR None).
     """
 
     def __init__(
         self,
-        json_path,
+        json_path: str,
         tokenizer,        # MBart or other HF tokenizer
         config: dict,     # your YAML config
         phase="train",
@@ -46,142 +65,135 @@ class SignSegmentS2TDataset(Dataset):
         self.tokenizer = tokenizer
         self.config = config
 
-        # # 1) Load the JSON
-        # if self.phase == "train":
-        #     self.raw_data = merge_json_files(json_paths)
-        # else:
-        with open(json_path, 'rb') as f:
+        # 1) Load the JSON
+        with open(json_path, "rb") as f:
             self.raw_data = json.load(f)
-
         self.keys = list(self.raw_data.keys())
 
-
-        # 2) Load the pseudo-gloss dictionary (like "data/processed_words.gloss_pkl")
-        # emb_pkl = self.config["data"].get("pg_pickle", "data/processed_words.gloss_pkl")
+        # 2) Load the pseudo-gloss dictionary (like "processed_words.pkl")
         emb_pkl = config["data"].get("vocab_file", "")
         if not os.path.exists(emb_pkl):
             raise FileNotFoundError(f"Pseudo-gloss pickle not found => {emb_pkl}")
 
         with open(emb_pkl, "rb") as pf:
             self.dict_processed_words = pickle.load(pf)
-        #  { "dict_sentence": { entireGlossStr => [tokens...] },
-        #    "dict_lem_to_id": { token => tokenID }, ... }
+        # e.g. {
+        #    "dict_sentence": { "ACANTHUS LEAF ..." => [12, 49, ...] },
+        #    "dict_lem_to_id": { "ACANTHUS":12, "LEAF":49, ... }
+        # }
 
-        # 3) Basic transform pipeline
-        #    If you want vidaug, random transforms, etc. you can insert them here
-        #    For now, we do a simple "Resize => ToTensor => Normalize"
+        # 2b) If 'keywords_proj' is True, load topic dictionary
+        self.use_topics = bool(self.config["model"].get("keywords_proj", False))
+        if self.use_topics:
+            topic_pkl = self.config["data"].get("topic_file", "")
+            if not os.path.exists(topic_pkl):
+                raise FileNotFoundError(f"Topic pickle not found => {topic_pkl}")
+            with open(topic_pkl, "rb") as pf:
+                self.dict_processed_topics = pickle.load(pf)
+            # e.g. {
+            #    "dict_lem_counter": {...},
+            #    "dict_sentence": { (topicA, topicB,...): [topicA, topicB,...] },
+            #    "dict_lem_to_id": { "Health":0, "Dust Mask":1, ... }
+            # }
+        else:
+            self.dict_processed_topics = None
 
+        # 3) Data transform pipeline
         self.data_transform = T.Compose([
-            T.Lambda(lambda x: x.float() / 255.0),  # Replace ToTensor()
-            T.Resize((self.input_size, self.input_size), 
-                     antialias=True),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            T.Lambda(lambda x: x.float() / 255.0),
+            T.Resize((self.input_size, self.input_size), antialias=True),
+            T.Normalize([0.485, 0.456, 0.406],
+                        [0.229, 0.224, 0.225]),
         ])
 
-        # self.data_transform = T.Compose([
-        #     T.Resize((self.input_size, self.input_size), interpolation=T.InterpolationMode.BILINEAR),
-        #     T.ToTensor(),
-        #     T.Normalize([0.485, 0.456, 0.406],
-        #                 [0.229, 0.224, 0.225]),
-        # ])
-
-        # 4) Max length for frames
+        # 4) Max length frames
         self.max_length = self.config["data"].get("max_length", 300)
-        
-        # 5) Set downsampling rate
+        # 5) Downsample rate
         self.k = self.config["data"].get("downsample_rate", 0.25)
-    
+
     def get_downsampled_indices(self, num_frames: int, train: bool, k: float = 0.25) -> list:
         """
         Get indices of selected frames after downsampling.
-        
-        Args:
-            num_frames (int): Total number of frames in the original video.
-            phase (str): "train" for random sampling, "inference" for first frame selection.
-            k (float, optional): Downsampling rate. Defaults to 0.25.
-        
-        Returns:
-            list: Indices of selected frames.
         """
-        num_clips = int(num_frames * k)  # Total number of clips
-        clip_size = num_frames // num_clips  # Frames per clip
+        num_clips = max(1, int(num_frames * k))
+        clip_size = max(1, num_frames // num_clips)
         indices = []
         
         for i in range(num_clips):
             start_idx = i * clip_size
             if train:
-                indices.append(np.random.randint(start_idx, start_idx + clip_size))
+                idx_ = np.random.randint(start_idx, start_idx + clip_size)
             else:
-                indices.append(start_idx)
-            
+                idx_ = start_idx
+            idx_ = min(idx_, num_frames - 1)  # safety clamp
+            indices.append(idx_)
         return indices
 
     def __len__(self):
         return len(self.keys)
-    
+
     def __getitem__(self, idx):
         key = self.keys[idx]
         seg_info = self.raw_data[key]
 
-        # A) name_sample can just be the JSON key
+        # A) name_sample
         name_sample = key
 
-        # B) text_str from 'caption' or some other field
+        # B) text_str
         text_str = seg_info.get("caption", "")
 
-        # C) Build pseudo-gloss ID list from seg_info["gloss"]
+        # C) Pseudo-gloss ID list
         gloss_str = seg_info.get("gloss", "")
         tokens = self.dict_processed_words["dict_sentence"].get(gloss_str, [])
-        pg_id = []
-        for tok in tokens:
-            if tok in self.dict_processed_words["dict_lem_to_id"]:
-                pg_id.append(self.dict_processed_words["dict_lem_to_id"][tok])
-            else:
-                pg_id.append(-1)  # unknown token
+        pg_id = [self.dict_processed_words["dict_lem_to_id"].get(tok, -1) for tok in tokens]
 
-        # D) Use decord to load frames from .mp4
-        filename = seg_info.get("output_file")
-        root_path = self.config["data"].get("root_dir")
+        # D) If topics are enabled, parse them
+        topic_ids = None
+        if self.use_topics and "topics" in seg_info:
+            topic_list = seg_info["topics"]
+            # Map each topic to ID from dict_processed_topics
+            topic_ids = [self.dict_processed_topics["dict_lem_to_id"].get(t, -1) for t in topic_list]
+
+        # E) Video frames
+        filename = seg_info.get("output_file", "")
+        root_path = self.config["data"].get("root_dir", "")
         mp4_path = os.path.join(root_path, filename)
 
         if not os.path.exists(mp4_path):
-            print(f"Warning: Video path not found => {mp4_path}. Skipping sample.")
+            print(f"[WARN] Video path not found => {mp4_path}. Skipping sample.")
             return None
-
 
         try:
             vr = VideoReader(mp4_path, ctx=cpu(0))
             num_frames = len(vr)
-            stride = self.config["data"].get("frame_stride", 10)
-            # indices = list(range(0, num_frames, stride))
-            indices = self.get_downsampled_indices(num_frames, self.phase == "train", k=self.k)
-            
-            # Batch decode frames
-            frames = vr.get_batch(indices)  # decord.NDArray (T,H,W,3)
-            frames = frames.asnumpy()  # numpy array
-            frames = torch.from_numpy(frames)  # (T,H,W,3), uint8
-            
-            # Permute to (T,C,H,W) and normalize
-            frames = frames.permute(0, 3, 1, 2)  # (T,3,H,W)
-            frames = self.data_transform(frames)  # (T,3,input_size,input_size)
-            
-            # Truncate if needed
+            indices = self.get_downsampled_indices(num_frames, (self.phase=="train"), k=self.k)
+            frames = vr.get_batch(indices).asnumpy()  # (T,H,W,3)
+            frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # => (T,3,H,W)
+            frames = self.data_transform(frames)
             if frames.shape[0] > self.max_length:
                 frames = frames[:self.max_length]
-                
         except Exception as e:
-            print(f"Error loading {mp4_path}: {e}")
+            print(f"[ERROR] loading {mp4_path}: {e}")
             return None
 
-        return name_sample, frames, text_str, pg_id
+        # Return everything
+        return (name_sample, frames, text_str, pg_id, topic_ids)
 
 def signsegment_s2t_collate_fn(batch, tokenizer, max_words=128):
     """
-    Expects a list of (name_sample, frames_tensor, text_str, pg_id).
-    We'll filter out any samples that failed (i.e. are None). Then, we pad frames => (B, T, 3, H, W), create a mask => (B, T).
-    We'll tokenize 'text_str' => 'tgt_input'.
-    We'll collect 'pg_id' into 'pgs'.
-    Output => (src_input, tgt_input, pgs).
+    Expects a list of (name_sample, frames_tensor, text_str, pg_id, topic_ids or None).
+    We'll filter out any samples that failed => None.
+
+    Returns => 
+      src_input = {
+        "input_ids": (B,T,3,H,W),
+        "attention_mask": (B,T),
+        "name_batch": [...],
+        "src_length_batch": (B,)
+      },
+      tgt_input = { "input_ids", "attention_mask" }, # from text
+      pgs_list => list of gloss ID lists
+      topics_list => list of topic ID lists or None
     """
     # Filter out None samples
     batch = [sample for sample in batch if sample is not None]
@@ -190,20 +202,25 @@ def signsegment_s2t_collate_fn(batch, tokenizer, max_words=128):
     frames_list = []
     text_list = []
     pgs_list = []
+    topics_list = []
 
-    # If no valid samples remain, return empty outputs.
     if len(batch) == 0:
-        return {}, {}, []
+        return {}, {}, [], []
 
-    # 1) Unpack the batch
-    for (name_sample, frames_tensor, text_str, pg_id) in batch:
+    # 1) Unpack
+    for sample in batch:
+        name_sample, frames_tensor, text_str, pg_id, topic_ids = sample
         name_batch.append(name_sample)
         frames_list.append(frames_tensor)
         text_list.append(text_str)
         pgs_list.append(pg_id)
+        if topic_ids is None:
+            topics_list.append([])
+        else:
+            topics_list.append(topic_ids)
 
     b = len(frames_list)
-    # 2) Find max T for frames
+    # 2) Pad frames => (B, max_len, 3, H, W)
     max_len = max(f.shape[0] for f in frames_list)
     c = 3
     h, w = frames_list[0].shape[-2], frames_list[0].shape[-1]
@@ -229,24 +246,19 @@ def signsegment_s2t_collate_fn(batch, tokenizer, max_words=128):
             truncation=True
         )
 
-    # 4) Build src_input
+    # 4) build src_input
     src_input = {
-        "input_ids": batch_frames,   # shape => (B, T, 3, H, W)
-        "attention_mask": mask,        # shape => (B, T)
+        "input_ids": batch_frames,  # (B, T, 3, H, W)
+        "attention_mask": mask,     # (B, T)
         "name_batch": name_batch,
         "src_length_batch": src_length_batch
     }
 
-    return src_input, tgt_input, pgs_list
-
-# ----------------------------------------------------------------------------
-# 3) DATA MODULE
-# ----------------------------------------------------------------------------
+    return src_input, tgt_input, pgs_list, topics_list
 
 class SignSegmentS2TDataModule(pl.LightningDataModule):
     """
-    A single DataModule that uses the above dataset + collate 
-    to produce (src_input, tgt_input, pgs).
+    YTSL DataModule that yields => (src_input, tgt_input, pgs_list, topics_list).
     """
 
     def __init__(
@@ -260,7 +272,7 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
         num_workers=2,
         max_words=128,
         resize=256,
-        input_size=224
+        input_size=224,
     ):
         super().__init__()
         self.train_json = train_json
@@ -297,6 +309,7 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
                 resize=self.resize,
                 input_size=self.input_size
             )
+
         if stage in ("validate", None):
             self.val_dataset = SignSegmentS2TDataset(
                 json_path=self.val_json,
@@ -336,9 +349,9 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
+            persistent_workers=True,
             pin_memory=True,
             num_workers=self.num_workers,
-            persistent_workers=True,
             collate_fn=lambda batch: signsegment_s2t_collate_fn(
                 batch, self.tokenizer, self.max_words
             )
@@ -348,25 +361,22 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
-            persistent_workers=True,
             shuffle=False,
+            persistent_workers=True,
             num_workers=self.num_workers,
             collate_fn=lambda batch: signsegment_s2t_collate_fn(
                 batch, self.tokenizer, self.max_words
             )
         )
 
-# ----------------------------------------------------------------------------
-# 4) MAIN TEST
-# ----------------------------------------------------------------------------
-
 if __name__ == "__main__":
+    import argparse
     parser = argparse.ArgumentParser(description="SignSegmentS2TDataModule test script.")
     parser.add_argument("--train_json", type=str, default=None)
     parser.add_argument("--val_json", type=str, default=None)
     parser.add_argument("--test_json", type=str, default=None)
-    parser.add_argument("--data_config", type=str, default="/home/ef0036/Projects/contextLLM/configs/config.yaml")
-    parser.add_argument("--tokenizer_path", type=str, default="/home/ef0036/Projects/contextLLM/pretrain_models/MBart_trimmed", help="Path to MBart tokenizer.")
+    parser.add_argument("--data_config", type=str, default="configs/config.yaml")
+    parser.add_argument("--tokenizer_path", type=str, default="pretrain_models/MBart_trimmed", help="Path to MBart tokenizer.")
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--max_words", type=int, default=128)
@@ -375,16 +385,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_batches", type=int, default=1)
     args = parser.parse_args()
 
-    # Load config
     with open(args.data_config, "r") as f:
         data_config = yaml.safe_load(f)
 
-    # If no tokenizer path is given, fallback or error
-    if not args.tokenizer_path:
-        print("[Warning] No tokenizer_path provided, using a random MBart path.")
-        args.tokenizer_path = "facebook/mbart-large-50"
-
-    # Create the tokenizer
+    # Create tokenizer
     tokenizer = MBartTokenizer.from_pretrained(args.tokenizer_path)
 
     # Create DataModule
@@ -401,46 +405,25 @@ if __name__ == "__main__":
         input_size=args.input_size
     )
 
-    # Setup
     dm.setup(stage="fit")
-
-    # Quick test on train_dataloader
     train_loader = dm.train_dataloader()
     if not train_loader:
         print("[Main] No train loader found.")
     else:
         print(f"[Main] Checking train loader with up to {args.max_batches} batches.")
         for i, batch in enumerate(train_loader):
-            src_input, tgt_input, pgs = batch
+            src_input, tgt_input, pgs_list, topics_list = batch
             if not src_input:
                 print(f"[Main] Skipped an empty train batch due to corrupted samples.")
                 continue
             print(f"  [Train Batch {i}]")
             print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
             print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
-            print("   pgs[0]:", pgs[0], " (some pseudo-gloss IDs)")
+            print("   pgs_list[0]:", pgs_list[0], " (some pseudo-gloss IDs)")
+            print("   topics_list[0]:", topics_list[0], " (some topic IDs or empty if keywords_proj=False)")
             if i+1 >= args.max_batches:
                 break
 
-    # Quick test on val_dataloader
-    val_loader = dm.val_dataloader()
-    if not val_loader:
-        print("[Main] No val loader found.")
-    else:
-        print(f"[Main] Checking val loader with up to {args.max_batches} batches.")
-        for i, batch in enumerate(val_loader):
-            src_input, tgt_input, pgs = batch
-            if not src_input:
-                print(f"[Main] Skipped an empty val batch due to corrupted samples.")
-                continue
-            print(f"  [Val Batch {i}]")
-            print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
-            print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
-            print("   pgs[0]:", pgs[0])
-            if i+1 >= args.max_batches:
-                break
-
-    # Quick test on test_dataloader
     dm.setup(stage="test")
     test_loader = dm.test_dataloader()
     if not test_loader:
@@ -448,14 +431,16 @@ if __name__ == "__main__":
     else:
         print(f"[Main] Checking test loader with up to {args.max_batches} batches.")
         for i, batch in enumerate(test_loader):
-            src_input, tgt_input, pgs = batch
+            src_input, tgt_input, pgs_list, topics_list = batch
             if not src_input:
-                print(f"[Main] Skipped an empty test batch due to corrupted samples.")
+                print(f"[Main] Skipped an empty test batch.")
                 continue
             print(f"  [Test Batch {i}]")
             print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
             print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
-            print("   pgs[0]:", pgs[0])
+            print("   pgs_list[0]:", pgs_list[0])
+            print("   topics_list[0]:", topics_list[0])
             if i+1 >= args.max_batches:
                 break
+
     print("[Main] Done testing data module.")
