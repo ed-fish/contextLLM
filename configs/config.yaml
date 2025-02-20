@@ -1,18 +1,18 @@
 data:
     # lmdb_path: /home/sobhan/Documents/Code/LLaMA-Adapter/SQA-Lightning/src/sqa/data/lmdb
-    max_length: 200
+    max_length: 300
     num_labels: 30519
-    vocab_file: /home/ef0036/Projects/contextLLM/data/combined_files/combined_vocab.pkl
-    root_dir: /home/ef0036/remote_mount/nobackup/scratch4weeks/ef0036/
+    vocab_file: data/combined_files/combined_vocab.pkl
+    root_dir: /mnt/fast/nobackup/scratch4weeks/ef0036/
     frame_stride: 16
     downsample_rate: 0.25
     # labels: /home/sobhan/Documents/Code/MLLM/data/labels
 model:
     # I3D: /home/sobhan/Documents/Code/PSP/tmp/meinedgs_i3d.pth.tar
-    tokenizer: /home/ef0036/Projects/contextLLM/pretrain_models/MBart_trimmed_yt_h2s
-    transformer: /home/ef0036/Projects/contextLLM/pretrain_models/mytran_yt_h2s
+    tokenizer: pretrain_models/MBart_trimmed_yt_h2s
+    transformer: pretrain_models/mytran_yt_h2s
     # resnet: /home/sobhan/Documents/Code/MLLM/ckpts/resnet18.pth
-    dino: /home/ef0036/Projects/contextLLM/pretrain_models/DINO/tmp.pth
+    dino: pretrain_models/DINO/tmp.pth
     embed_dim: 1024
     sign_proj: True
 training:

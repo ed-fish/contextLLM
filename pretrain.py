@@ -34,18 +34,18 @@ def get_args_parser():
                         help='The frequency of metric evaluation, e.g. BLEU score')
     
     # Transformer & Encoder
-    parser.add_argument('--mbart_path', type=str, default="/home/ef0036/Projects/contextLLM/pretrain_models/MBart_trimmed_yt_h2s",
+    parser.add_argument('--mbart_path', type=str, default="pretrain_models/MBart_trimmed_yt_h2s",
                         help='Path to the MBart model.')
-    parser.add_argument('--tokenizer_path', type=str, default="/home/ef0036/Projects/contextLLM/pretrain_models/MBart_trimmed_yt_h2s",
+    parser.add_argument('--tokenizer_path', type=str, default="pretrain_models/MBart_trimmed_yt_h2s",
                         help='Path to the MBart tokenizer.')
     parser.add_argument('--encoder_ckpt', type=str, default=None, help='Path to the encoder checkpoint.')
     parser.add_argument('--model_ckpt', type=str, default=None, help='Path to the model checkpoint.')
     parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate.')
     
     # Data / JSON paths
-    parser.add_argument('--train_json', type=str, default="/home/ef0036/Projects/contextLLM/data/combined_files/train_combine.json", help='Path to final JSON for train segments.')
-    parser.add_argument('--val_json', type=str, default="/home/ef0036/Projects/contextLLM/data/how2sign/val/how2sign_val_path.json", help='Path to final JSON for val segments.')
-    parser.add_argument('--test_json', type=str, default="/home/ef0036/Projects/contextLLM/data/how2sign/test/how2sign_test_path.json", help='Path to final JSON for test segments.')
+    parser.add_argument('--train_json', type=str, default="data/combined_files/train_combine.json", help='Path to final JSON for train segments.')
+    parser.add_argument('--val_json', type=str, default="data/how2sign/val/how2sign_val_path.json", help='Path to final JSON for val segments.')
+    parser.add_argument('--test_json', type=str, default="data/how2sign/test/how2sign_test_path.json", help='Path to final JSON for test segments.')
     
     parser.add_argument('--data_config', type=str, default='configs/config.yaml',
                         help='Path to the data config file.')  
@@ -154,8 +154,9 @@ def main(args):
         logger=logger,
         num_sanity_val_steps=0,
         accelerator="gpu",
-        devices=1,
+        devices=torch.cuda.device_count(),  # Automatically detects number of GPUs
         min_epochs=1,
+        strategy="ddp",
         max_epochs=args.epochs,
         precision=16,
         callbacks=callbacks,
