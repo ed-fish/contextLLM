@@ -1,26 +1,37 @@
+
+# Example config.yaml
 data:
-    # lmdb_path: /home/sobhan/Documents/Code/LLaMA-Adapter/SQA-Lightning/src/sqa/data/lmdb
-    max_length: 300
-    num_labels: 30519
-    vocab_file: data/combined_files/combined_vocab.pkl
-    root_dir: /mnt/fast/nobackup/scratch4weeks/ef0036/
-    frame_stride: 16
-    downsample_rate: 0.25
-    # labels: /home/sobhan/Documents/Code/MLLM/data/labels
+  max_length: 300
+  num_labels: 30520
+  vocab_file: data/combined_files/combined_vocab.pkl
+  topic_file: data/combined_files/keywords_vocab.pkl
+  root_dir: /mnt/fast/nobackup/scratch4weeks/ef0036/
+  frame_stride: 16
+  downsample_rate: 0.25
+
 model:
-    # I3D: /home/sobhan/Documents/Code/PSP/tmp/meinedgs_i3d.pth.tar
-    tokenizer: pretrain_models/MBart_trimmed_yt_h2s
-    transformer: pretrain_models/mytran_yt_h2s
-    # resnet: /home/sobhan/Documents/Code/MLLM/ckpts/resnet18.pth
-    dino: pretrain_models/DINO/tmp.pth
-    embed_dim: 1024
-    sign_proj: True
+  tokenizer: pretrain_models/MBart_trimmed_yt_h2s
+  transformer: pretrain_models/mytran_yt_h2s
+  dino: pretrain_models/DINO/tmp.pth
+  embed_dim: 1024
+  sign_proj: True
+  keywords_proj: False  # If True, dataset will load topics
+  loss: pgloss # pgloss or focal_loss
+
 training:
-    wandb: online # online or disabled
-    scale_embedding: False
-    #ckpt_path: /home/ef0036/Projects/contextLLM/outputs/run_2025-02-16_21-29-33/best-epoch=023-val_total_loss=12.029.ckpt
-    ckpt_path: "/home/ef0036/Projects/contextLLM/outputs/run_2025-02-18_00-10-30/best-epoch=002-val_total_loss=0.680.ckpt"
-    labels: "gloss"
+  wandb: online
+  scale_embedding: False
+  ckpt_path: "/home/ef0036/Projects/contextLLM/outputs/run_2025-02-18_00-10-30/best-epoch=002-val_total_loss=0.680.ckpt"
+  labels: "gloss"
+
+  # Settings for topic-based overlap
+  use_topic_overlap: False            # If true, incorporate topic overlap into similarity matrix
+  alpha_use_decay: True              # If true, we do linear decay of alpha
+  topic_alpha_start: 1.0             # initial alpha
+  topic_alpha_end: 0.0               # final alpha
+  max_epochs: 100                     # used for scheduling alpha
+
 save:
-    output: outputs
-    csv: csv_outputs/
+  output: outputs
+  csv: csv_outputs/
+

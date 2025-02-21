@@ -441,50 +441,79 @@ class SLRCLIP(nn.Module):
         self.model_txt = TextCLIP(config, inplanes=embed_dim, planes=embed_dim)
         for param in self.model_txt.parameters():
             param.requires_grad = False 
-        trainable_params_model_texts = sum(p.numel() for p in self.model_txt.parameters() if p.requires_grad)
 
         self.model_images = ImageCLIP(config, inplanes=embed_dim, planes=embed_dim)
-        trainable_params_model_images = sum(p.numel() for p in self.model_images.parameters() if p.requires_grad)
+
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
-    def compute_text_similarities_static(self, text_features):
-        # Clone text features and disable gradient tracking
-        text_features_static = text_features.clone().detach()
-        text_features_static.requires_grad = False  # Ensure no gradients are tracked
+        # Whether to incorporate topic-based overlap
+        self.use_topic_overlap = bool(config["training"].get("use_topic_overlap", False))
+        # topic_alpha is assigned in PreTrainModel on_train_epoch_start if alpha_use_decay is True
+        self.topic_alpha = config["training"].get("topic_alpha_start", 0.0)
 
-        # Compute cosine similarities
+    def compute_text_similarities_static(self, text_features):
+        # Standard text-sim as before
+        text_features_static = text_features.clone().detach()
+        text_features_static.requires_grad = False
         text_sim_matrix = torch.matmul(text_features_static, text_features_static.T)
         return text_sim_matrix
 
-    def create_soft_target_matrix_with_gradients(self, batch_size, text_sim_matrix, scale_off_diag=0.1):
-        # Create an identity matrix for the diagonal
-        target_matrix = torch.eye(batch_size, device=text_sim_matrix.device, requires_grad=False)
-        # Add off-diagonal text similarities
-        off_diag_matrix = scale_off_diag * text_sim_matrix * (1 - torch.eye(batch_size, device=text_sim_matrix.device, requires_grad=False))
-        target_matrix += off_diag_matrix
-        return target_matrix
+    def compute_topic_similarity(self, topics_list):
+        """
+        Returns a (B,B) matrix with Jaccard overlap in [0,1].
+        """
+        B = len(topics_list)
+        sim_mat = torch.zeros(B, B, dtype=torch.float)
+        for i in range(B):
+            set_i = set(t for t in topics_list[i] if t >= 0)  # exclude -1
+            for j in range(i, B):
+                set_j = set(t for t in topics_list[j] if t >= 0)
+                if not set_i or not set_j:
+                    overlap = 0.0
+                else:
+                    overlap_ij = len(set_i.intersection(set_j))
+                    union_ij = len(set_i.union(set_j))
+                    overlap = overlap_ij/union_ij if union_ij>0 else 0.0
+                sim_mat[i,j] = overlap
+                sim_mat[j,i] = overlap
+        return sim_mat
 
-    def forward(self, src_input, tgt_input):
+    def forward(self, src_input, tgt_input, topics_list=None):
         image_features, psp_logits = self.model_images(src_input)
         text_features = self.model_txt(tgt_input)
 
-        # normalized features
+        # Normalize
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        text_features  = text_features  / text_features.norm(dim=-1, keepdim=True)
 
+        # Basic text-sim matrix
         text_sim_matrix = self.compute_text_similarities_static(text_features)
-        # cosine similarity as logits
+
+        # Incorporate topic overlap if enabled
+        if self.use_topic_overlap and (topics_list is not None):
+            topic_mat = self.compute_topic_similarity(topics_list).to(text_sim_matrix.device)
+            # Add topic_mat * self.topic_alpha
+            text_sim_matrix = text_sim_matrix + self.topic_alpha * topic_mat
+
+        # Build final logits
         logit_scale = self.logit_scale.exp()
         logits_per_image = logit_scale * image_features @ text_features.t()
-        logits_per_text = logit_scale * text_features @ image_features.t()
+        logits_per_text  = logit_scale * text_features  @ image_features.t()
 
-        # ground_truth = torch.eye(logits_per_image.shape[0], device=logits_per_text.device, dtype=logits_per_image.dtype, requires_grad=False)
+        # Build partial ground truth
         ground_truth = self.create_soft_target_matrix_with_gradients(
             batch_size=logits_per_image.shape[0],
             text_sim_matrix=text_sim_matrix,
             scale_off_diag=0.0,
         )
         return logits_per_image, logits_per_text, ground_truth, psp_logits
+
+    def create_soft_target_matrix_with_gradients(self, batch_size, text_sim_matrix, scale_off_diag=0.1):
+        # Same as your code
+        target_matrix = torch.eye(batch_size, device=text_sim_matrix.device, requires_grad=False)
+        off_diag_matrix = scale_off_diag * text_sim_matrix * (1 - torch.eye(batch_size, device=text_sim_matrix.device, requires_grad=False))
+        target_matrix += off_diag_matrix
+        return target_matrix
 
 def config_decoder(config):
     from transformers import AutoConfig

@@ -227,7 +227,7 @@ class PG_Loss(nn.Module):
             # 4) Sum over all elements => total scalar
             # If you're accumulating gradients, using sum means the total gradient scale 
             # grows with batch size or accumulation steps, which may be desired.
-            return per_elem_loss.sum() 
+            return per_elem_loss.mean() 
         
 
 
