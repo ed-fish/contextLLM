@@ -15,7 +15,8 @@ model:
   dino: pretrain_models/DINO/tmp.pth
   embed_dim: 1024
   sign_proj: True
-  keywords_proj: True  # If True, dataset will load topics
+  keywords_proj: False  # If True, dataset will load topics
+  loss: pgloss # pgloss or focal_loss
 
 training:
   wandb: online
@@ -24,11 +25,11 @@ training:
   labels: "gloss"
 
   # Settings for topic-based overlap
-  use_topic_overlap: True            # If true, incorporate topic overlap into similarity matrix
+  use_topic_overlap: False            # If true, incorporate topic overlap into similarity matrix
   alpha_use_decay: True              # If true, we do linear decay of alpha
   topic_alpha_start: 1.0             # initial alpha
   topic_alpha_end: 0.0               # final alpha
-  max_epochs: 50                     # used for scheduling alpha
+  max_epochs: 100                     # used for scheduling alpha
 
 save:
   output: outputs

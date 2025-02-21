@@ -28,9 +28,15 @@ class PreTrainModel(pl.LightningModule):
         self.lr = lr
         self.loss_img = KLLoss()
         self.loss_txt = KLLoss()
-        self.loss_pg  = PG_FocalLossProb()
-        self.landa = 0.5  # scale for psp loss
+        loss_function = self.config["model"].get("model", "pgloss")
+        if loss_function == "pgloss":
+            self.loss_pg  = PG_Loss()
+        elif loss_function == "focal_loss":
+            self.loss_pg  = PG_FocalLossProb()
+        else:
+            raise ValueError(f"Invalid loss function: {loss_function}")
 
+        self.landa = 0.5  # scale for psp loss
         # 4) Check alpha scheduling or static
         self.use_decay = bool(self.config["training"].get("alpha_use_decay", False))
         self.use_topic_overlap = bool(self.config["training"].get("use_topic_overlap", False))
