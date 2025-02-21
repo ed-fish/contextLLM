@@ -86,13 +86,15 @@ class FineTuneModel(pl.LightningModule):
         self.log('learning_rate', lr, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
     def training_step(self, batch, batch_idx):
-        src_input, tgt_input, _ = batch
+
+        (src_input, tgt_input, _, _) = batch
         outputs, loss = self.model(src_input, tgt_input)
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        src_input, tgt_input, _ = batch
+
+        (src_input, tgt_input, _, _) = batch
         outputs, loss = self.model(src_input, tgt_input)
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
