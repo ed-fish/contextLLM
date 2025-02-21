@@ -21,9 +21,9 @@ SI_IDX,PAD_IDX, UNK_IDX,BOS_IDX, EOS_IDX = 0 ,1 ,2 ,3 ,4
 class SignSegmentS2TDataset(Dataset):
     """
     Loads a final JSON with:
-      - "output_file": path to .mp4
-      - "caption" or "text": the spoken text to tokenize
-      - "gloss": entire pseudo-gloss string
+    - "output_file": path to .mp4
+    - "caption" or "text": the spoken text to tokenize
+    - "gloss": entire pseudo-gloss string
     Also loads a processed_words.*.pkl to map each token in 'gloss' -> ID list.
     Returns (name_sample, frames_tensor, text_str, pg_ids).
     """
