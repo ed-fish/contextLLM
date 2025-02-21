@@ -4,7 +4,9 @@ from models.Finetune_Model import FineTuneModel
 from collections import OrderedDict
 
 from models.utils import manage_directory, SaveBestModelOnNEpochs
-from dataset.slt_dataset import DataModule
+
+from dataset.ytsl_dataset import SignSegmentS2TDataModule
+# from dataset.slt_dataset import DataModule
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, Callback
@@ -26,7 +28,7 @@ def get_args_parser():
     parser.add_argument('--eval_freq', default=2, type=int, metavar='N', 
                         help='The frequency of metric evaluation, e.g Bleu score')
     ##################Transformer and Encoder Params####################################   
-    parser.add_argument('--tokenizer_path', type=str, default="pretrain_models/MBart_trimmed",
+    parser.add_argument('--tokenizer_path', type=str, default="pretrain_models/MBart_trimmed_yt_h2s",
                         help='Path to the MBart tokenizer.')
     parser.add_argument('--encoder_ckpt', type=str, default=None, help='Path to the encoder checkpoint.')
     parser.add_argument('--model_ckpt', type=str, default='pretrain_new/run_2024-12-07_14-22-28/best-epoch=050-val_loss=0.921.ckpt', help='Path to the model checkpoint.')
@@ -41,6 +43,10 @@ def get_args_parser():
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size.')
     parser.add_argument('--data_ver', type=int, default=0, help='Data version.')
     parser.add_argument('--run_ver', type=int, default=0, help='Data version.')
+
+    parser.add_argument('--train_json', type=str, default="data/how2sign/train/how2sign_train_path.json", help='Path to final JSON for train segments.')
+    parser.add_argument('--val_json', type=str, default="data/how2sign/val/how2sign_val_path.json", help='Path to final JSON for val segments.')
+    parser.add_argument('--test_json', type=str, default="data/how2sign/test/how2sign_test_path.json", help='Path to final JSON for test segments.')
     
     parser.add_argument('--logger', type=str, default='wandb', help='Logger type.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
@@ -89,7 +95,7 @@ def get_args_parser():
                         help='LR decay rate (default: 0.1)')
     return parser
 
-WANDB_CONFIG = {"WANDB_API_KEY": "1af8cc2a4ed95f2ba66c31d193caf3dd61c3a41f", "WANDB_IGNORE_GLOBS":"*.patch", 
+WANDB_CONFIG = {"WANDB_API_KEY": "b3a33bb694f0df2dfbd61a052b8e6d5aef47dba6", "WANDB_IGNORE_GLOBS":"*.patch", 
                 "WANDB_DISABLE_CODE": "true", "TOKENIZERS_PARALLELISM": "false"}
 def setupWandB(storage=None):
     os.environ.update(WANDB_CONFIG)
@@ -106,7 +112,7 @@ def main(args):
     with open(args.data_config, 'r') as file:
             config = yaml.safe_load(file)
 
-    args.text_path = config['data']['labels']
+    args.text_path = config['data']['vocab_file']
     args.tokenizer_path = config['model']['tokenizer']
     args.output_dir = config['save']['output']
     args.log_dir = config['save']['output']
@@ -149,15 +155,18 @@ def main(args):
                 csv_dire=args.save_csv)
 
 
-    tokenizer = MBartTokenizer.from_pretrained(config['model']['tokenizer'], src_lang = 'de_DE', tgt_lang = 'de_DE')
-    data_module = DataModule(
-                root_text_path=args.text_path, 
-                data_config=args.data_config,
-                qa_csv_path=args.qa_csv_path,
-                tokenizer=tokenizer,
-                batch_size=args.batch_size, 
-                num_workers=args.num_workers,
-                data_ver=args.data_ver)
+    tokenizer = MBartTokenizer.from_pretrained(config['model']['tokenizer'], src_lang = 'en_XX', tgt_lang = 'en_XX')
+
+    data_module = SignSegmentS2TDataModule(
+            train_json=args.train_json,
+            val_json=args.val_json,
+            test_json=args.test_json,
+            resize=(224,224),
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            tokenizer=tokenizer,
+            data_config=config
+        )
 
     trainer = pl.Trainer(
         strategy="ddp",
