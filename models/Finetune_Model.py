@@ -237,11 +237,13 @@ class FineTuneModel(pl.LightningModule):
     def add_weight_decay(self, weight_decay, skip_list=()):
         decay = []
         no_decay = []
-        for name, param in self.named_parameters():
-            if not param.requires_grad:
+        for name, p in self.named_parameters():
+            if not p.requires_grad:
                 continue
+            elif name.endswith(".bias") or "LayerNorm.weight" in name:
+                no_decay.append(p)
             else:
-                decay.append(param)
+                decay.append(p)
         return [
             {'params': no_decay, 'weight_decay': 0.0},
             {'params': decay, 'weight_decay': weight_decay}
