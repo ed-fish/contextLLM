@@ -78,7 +78,7 @@ class TemporalConv(nn.Module):
             if ks[0] == 'P':
                 modules.append(nn.MaxPool1d(kernel_size=int(ks[1]), ceil_mode=False))
             elif ks[0] == 'K':
-                modules.adinoppend(
+                modules.append(
                     nn.Conv1d(input_sz, self.hidden_size, kernel_size=int(ks[1]), stride=1, padding=0)
                 )
                 modules.append(nn.BatchNorm1d(self.hidden_size))
