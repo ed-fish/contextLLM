@@ -38,19 +38,22 @@ class FineTuneModel(pl.LightningModule):
         print('***********************************')
         print('Load parameters from Pretrained...')
         print('***********************************')
-        state_dict = torch.load(args.model_ckpt, map_location='cpu')['state_dict']
-        new_state_dict = OrderedDict()
-        for k, v in state_dict.items():
-            if 'conv_2d' in k or 'conv_1d' in k:
-                k = 'backbone.' + '.'.join(k.split('.')[3:])
-                new_state_dict[k] = v
-            if 'trans_encoder' in k:
-                k = 'mbart.base_model.model.model.encoder.' + '.'.join(k.split('.')[5:])
-                new_state_dict[k] = v
+        if args.model_ckpt:
+            state_dict = torch.load(args.model_ckpt, map_location='cpu')['state_dict']
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if 'conv_2d' in k or 'conv_1d' in k:
+                    k = 'backbone.' + '.'.join(k.split('.')[3:])
+                    new_state_dict[k] = v
+                if 'trans_encoder' in k:
+                    k = 'mbart.base_model.model.model.encoder.' + '.'.join(k.split('.')[5:])
+                    new_state_dict[k] = v
 
-        ret = self.model.load_state_dict(new_state_dict, strict=False)
-        print('Missing keys: \n', '\n'.join(ret.missing_keys))
-        print('Unexpected keys: \n', '\n'.join(ret.unexpected_keys))
+            ret = self.model.load_state_dict(new_state_dict, strict=False)
+            print('Missing keys: \n', '\n'.join(ret.missing_keys))
+            print('Unexpected keys: \n', '\n'.join(ret.unexpected_keys))
+        else:
+            print("no model loaded random init")
 
         ################ Initialize the tokenizer ####################
         self.tokenizer = MBartTokenizer.from_pretrained(self.config['model']['tokenizer'],

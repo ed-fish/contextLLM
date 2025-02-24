@@ -96,12 +96,14 @@ def main(args):
             args.test_json = config['data']['test_json']
     
     # Overwrite other fields from config if needed:
-    if 'save' in config:
-        args.output_dir = config['save'].get('output', args.output_dir)
-        args.log_dir    = config['save'].get('output', args.log_dir)
-        args.save_csv   = config['save'].get('csv', args.save_csv)
-    if 'training' in config:
-        args.model_ckpt = config['training'].get('ckpt_path', args.model_ckpt)
+    # if 'save' in config:
+    #     args.output_dir = config['save'].get('output', args.output_dir)
+    #     args.log_dir    = config['save'].get('output', args.log_dir)
+    #     args.save_csv   = config['save'].get('csv', args.save_csv)
+    # if 'training' in config:
+    #     args.model_ckpt = config['training'].get('ckpt_path', args.model_ckpt)
+    args.log_dir = args.output_dir
+    args.save_csv = args.output_dir
 
     current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     if args.logger == 'wandb':

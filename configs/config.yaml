@@ -1,19 +1,17 @@
 
 # Example config.yaml
 data:
-  max_length: 300
-  num_labels: 30520
+  max_length: 50
   vocab_file: data/combined_files/combined_vocab.pkl
   topic_file: data/combined_files/keywords_vocab.pkl
-  root_dir: /mnt/fast/nobackup/scratch4weeks/ef0036/
-  frame_stride: 16
+  root_dir: /home/ef0036/remote_mount/nobackup/scratch4weeks/ef0036/
   downsample_rate: 0.25
 
 model:
   tokenizer: pretrain_models/MBart_trimmed_yt_h2s
   transformer: pretrain_models/mytran_yt_h2s
   dino: pretrain_models/DINO/tmp.pth
-  embed_dim: 1024
+  # embed_dim: 1024
   sign_proj: True
   keywords_proj: False  # If True, dataset will load topics
   loss: pgloss # pgloss or focal_loss
@@ -21,7 +19,8 @@ model:
 training:
   wandb: online
   scale_embedding: False
-  ckpt_path: "/home/ef0036/Projects/contextLLM/outputs/run_2025-02-18_00-10-30/best-epoch=002-val_total_loss=0.680.ckpt"
+  # ckpt_path: "/home/ef0036/remote_mount/nobackup/users/ef0036/contextLLM/outputs/run_2025-02-20_16-06-15/last.ckpt"
+  # ckpt_path: "/home/ef0036/Projects/contextLLM/outputs/run_2025-02-18_00-10-30/best-epoch=002-val_total_loss=0.680.ckpt"
   labels: "gloss"
 
   # Settings for topic-based overlap

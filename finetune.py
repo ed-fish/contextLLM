@@ -31,7 +31,7 @@ def get_args_parser():
     parser.add_argument('--tokenizer_path', type=str, default="pretrain_models/MBart_trimmed_yt_h2s",
                         help='Path to the MBart tokenizer.')
     parser.add_argument('--encoder_ckpt', type=str, default=None, help='Path to the encoder checkpoint.')
-    parser.add_argument('--model_ckpt', type=str, default='pretrain_new/run_2024-12-07_14-22-28/best-epoch=050-val_loss=0.921.ckpt', help='Path to the model checkpoint.')
+    parser.add_argument('--model_ckpt', type=str, default=None, help='Path to the model checkpoint.')
     ##################Data Params##########################################################
     parser.add_argument('--text_path', type=str, default="data/labels", 
                         help='Path to the text data.')
@@ -51,8 +51,8 @@ def get_args_parser():
     parser.add_argument('--logger', type=str, default='wandb', help='Logger type.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--output_dir', type=str, default="finetune_new", help='Output directory.')
-    parser.add_argument('--log_dir', type=str, default="finetune_new", help='Output directory.')
-    parser.add_argument('--save_csv', type=str, default="csv_outputs/", help='Output directory.')
+    # parser.add_argument('--log_dir', type=str, default="finetune_new", help='Output directory.')
+    # parser.add_argument('--save_csv', type=str, default="csv_outputs/", help='Output directory.')
     # * Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
                         help='Optimizer (default: "adamw"')
@@ -93,6 +93,9 @@ def get_args_parser():
                         help='patience epochs for Plateau LR scheduler (default: 10')
     parser.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RATE',
                         help='LR decay rate (default: 0.1)')
+    parser.add_argument('--exp_name', type=str, help='Name of the experiment.')
+
+
     return parser
 
 WANDB_CONFIG = {"WANDB_API_KEY": "b3a33bb694f0df2dfbd61a052b8e6d5aef47dba6", "WANDB_IGNORE_GLOBS":"*.patch", 
@@ -114,21 +117,26 @@ def main(args):
 
     args.text_path = config['data']['vocab_file']
     args.tokenizer_path = config['model']['tokenizer']
-    args.output_dir = config['save']['output']
-    args.log_dir = config['save']['output']
-    args.save_csv = config['save']['csv']
-    args.save_csv = args.save_csv.split("/")[0] + str(args.run_ver) + "/"
-    args.model_ckpt = config['training']['ckpt_path']
+    # args.output_dir = config['save']['output']
+    args.log_dir = os.path.join(args.output_dir, args.exp_name)
+    args.save_csv = os.path.join(args.output_dir, args.exp_name)
+    args.save_csv = os.path.join(args.output_dir, args.exp_name)
 
     # set logger
     current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     if args.logger == 'wandb':
-        save_dir=f'{args.log_dir}/log_{current_time}_{args.run_ver}'
+        if args.exp_name is not None:
+            exp_name = args.exp_name
+        else:
+            exp_name = current_time
+        save_dir=f'{args.log_dir}/{exp_name}'
         setupWandB(storage=save_dir)
-        logger = WandbLogger(project="dino-test", config=vars(args))
+        logger = WandbLogger(project="dino-test", name=exp_name, config=vars(args))
     else:
         logger = TensorBoardLogger(save_dir=f'{args.log_dir}/log_{current_time}', name="Sign2GPT")
-    dirpath = f'{args.output_dir}/run_{current_time}_{args.run_ver}'
+    dirpath = f'{args.output_dir}/{args.exp_name}/weights'
+    os.makedirs(dirpath, exist_ok=True)
+
     print("Current Time = {}".format(current_time)) 
     
     # set callbacks
@@ -141,6 +149,7 @@ def main(args):
     # dirpath=dirpath,
     # filename="best-{epoch:03d}-{val_loss:.3f}-{val_bleu:.3f}",
     # )
+
     checkpoint_callback = SaveBestModelOnNEpochs(
         save_every_n_epochs=args.eval_freq, 
         monitor="val_bleu", mode="max", 
@@ -153,7 +162,6 @@ def main(args):
                 args=args, 
                 eval_freq=args.eval_freq,
                 csv_dire=args.save_csv)
-
 
     tokenizer = MBartTokenizer.from_pretrained(config['model']['tokenizer'], src_lang = 'en_XX', tgt_lang = 'en_XX')
 
