@@ -68,7 +68,7 @@ class SignSegmentS2TDataset(Dataset):
         # 1) Load the JSON
         with open(json_path, "rb") as f:
             self.raw_data = json.load(f)
-        self.keys = list(self.raw_data.keys())
+        self.keys = list(self.raw_data.keys())[:500]
 
         # 2) Load the pseudo-gloss dictionary (like "processed_words.pkl")
         emb_pkl = config["data"].get("vocab_file", "")

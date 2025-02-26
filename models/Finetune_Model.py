@@ -218,9 +218,27 @@ class FineTuneModel(pl.LightningModule):
         self.test_step_outputs = []
 
     def teacher_forcing_generate(self, logits):
-        predicted = torch.argmax(logits, dim=-1)
+        """
+        Args:
+            logits: [batch_size, seq_len, vocab_size], 
+                    where the logit at position i predicts the i-th token.
+        Returns:
+            Decoded strings aligned so that position i in `predicted` 
+            corresponds to the i-th token in the reference.
+        """
+        # Skip the final position, which corresponds to predicting the token
+        # after the sequence ends.
+        predicted = torch.argmax(logits[:, :-1, :], dim=-1)
+
+        # Decode the tokens
         generated_texts = self.tokenizer.batch_decode(predicted, skip_special_tokens=True)
         return generated_texts
+
+
+    # def teacher_forcing_generate(self, logits):
+    #     predicted = torch.argmax(logits, dim=-1)
+    #     generated_texts = self.tokenizer.batch_decode(predicted, skip_special_tokens=True)
+    #     return generated_texts
 
     def generate(self, src_input):
         max_new_tokens, num_beams, decoder_start_token_id = 150, 4, self.tokenizer.lang_code_to_id['en_XX']
