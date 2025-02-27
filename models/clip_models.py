@@ -13,6 +13,8 @@ from torch.nn.utils.rnn import pad_sequence
 import torchvision
 import math
 from psp_head import HeadModel
+from transformers import T5ForConditionalGeneration, AutoConfig
+from peft import get_peft_model, LoraConfig
 PAD_IDX = 1
 
 def make_resnet(name='resnet18', resnet_path=None):
@@ -307,7 +309,7 @@ class Transformer(nn.Module):
                 self.layers.append(Downsampler())
 
         self.output_proj = nn.Linear(d_model, d_llm)
-        self.inits = 'standard'
+        self.inits = 'xavier'
         self.apply(self._init_weights)
     def _init_weights(self, module):
         """Initialize the weights."""
@@ -561,31 +563,57 @@ class gloss_free_model(nn.Module):
         self.config = config
         self.args = args
 
-        self.backbone = FeatureExtracter(frozen=False, dino_path=self.config['model']['dino'])
+        self.backbone = FeatureExtracter(frozen=True, dino_path=self.config['model']['dino'])
         # self.mbart = MBartForConditionalGeneration.from_pretrained(config['model']['visual_encoder'])
-        self.mbart = config_decoder(config)
+        # self.mbart = config_decoder(config)
 
-        lora_config = LoraConfig(
-            inference_mode=False,          # Enable training
-            r=16,                          # Rank of the update matrices
-            lora_alpha=32,                 # LoRA scaling factor
-            lora_dropout=0.1,               # Dropout probability
-            target_modules=["q_proj", "v_proj"]
-        )
-        self.mbart = get_peft_model(self.mbart, lora_config)
-        for param in self.mbart.parameters():
-            param.requires_grad = False
-        # Only unfreeze LoRA parameters
-        for name, param in self.mbart.named_parameters():
-            if "lora" in name:
-                param.requires_grad = True
+        # lora_config = LoraConfig(
+        #     inference_mode=False,          # Enable training
+        #     r=16,                          # Rank of the update matrices
+        #     lora_alpha=32,                 # LoRA scaling factor
+        #     lora_dropout=0.1,               # Dropout probability
+        #     target_modules=["q_proj", "v_proj"]
+        # )
+        # self.mbart = get_peft_model(self.mbart, lora_config)
+        # for param in self.mbart.parameters():
+        #     param.requires_grad = False
+        # # Only unfreeze LoRA parameters
+        # for name, param in self.mbart.named_parameters():
+        #     if "lora" in name:
+        #         param.requires_grad = True
 
         if config['model']['sign_proj']:
-            self.sign_emb = V_encoder(emb_size=embed_dim,feature_size=embed_dim)
+            self.sign_emb = V_encoder(emb_size=768,feature_size=embed_dim)
             self.embed_scale = math.sqrt(embed_dim) if config['training']['scale_embedding'] else 1.0
         else:
             self.sign_emb = nn.Identity()
             self.embed_scale = 1.0
+
+        # self.t5_dim = 1024  # If "t5-base"
+        # self.emb_proj = nn.Linear(embed_dim, self.t5_dim)
+
+        # 3) Initialize T5 from Hugging Face (already pretrained!)
+        t5_config = AutoConfig.from_pretrained("t5-base")
+        self.t5 = T5ForConditionalGeneration.from_pretrained("t5-base", config=t5_config)
+
+        # 4) Optional LoRA config: freeze everything except LoRA layers
+        lora_config = LoraConfig(
+            inference_mode=False,
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.1,
+            # T5’s attention layers can be named differently; 
+            # you might need "SelfAttention.q", "SelfAttention.v", "EncDecAttention.q", etc.
+            # This is just an example.
+            target_modules=["q", "v"]
+        )
+        self.t5 = get_peft_model(self.t5, lora_config)
+
+        for param in self.t5.parameters():
+            param.requires_grad = False
+        for name, param in self.t5.named_parameters():
+            if "lora" in name:
+                param.requires_grad = True
 
     def share_forward(self, src_input):
         
@@ -600,21 +628,33 @@ class gloss_free_model(nn.Module):
     def forward(self,src_input, tgt_input):
         
         inputs_embeds, attention_mask = self.share_forward(src_input)
+        output = self.t5(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask.cuda(),
+            labels=tgt_input['input_ids'].cuda(),
+            decoder_attention_mask=tgt_input['attention_mask'].cuda(),
+            return_dict=True
+        )
 
-        out = self.mbart(inputs_embeds = inputs_embeds,
-                    attention_mask = attention_mask.cuda(),
-                    # decoder_input_ids = tgt_input['input_ids'].cuda(),
-                    labels = tgt_input['input_ids'].cuda(),
-                    decoder_attention_mask = tgt_input['attention_mask'].cuda(),
-                    return_dict = True,
-                    )
-        return out['logits'], out['loss']
-    def generate(self, src_input, max_new_tokens, num_beams, decoder_start_token_id ):
+        return output.logits, output.loss
+
+        # out = self.mbart(inputs_embeds = inputs_embeds,
+        #             attention_mask = attention_mask.cuda(),
+        #             # decoder_input_ids = tgt_input['input_ids'].cuda(),
+        #             labels = tgt_input['input_ids'].cuda(),
+        #             decoder_attention_mask = tgt_input['attention_mask'].cuda(),
+        #             return_dict = True,
+        #             )
+        # return out['logits'], out['loss']
+
+    def generate(self, src_input, max_new_tokens=150, num_beams=4):
         inputs_embeds, attention_mask = self.share_forward(src_input)
-
-        out = self.mbart.generate(inputs_embeds = inputs_embeds,
-                                attention_mask = attention_mask, max_new_tokens=max_new_tokens, 
-                                num_beams = num_beams,
-                                decoder_start_token_id=decoder_start_token_id
-                            )
+        out = self.t5.generate(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            num_beams=num_beams,
+            # optionally: decoder_start_token_id=self.t5.config.decoder_start_token_id
+        )
         return out
+

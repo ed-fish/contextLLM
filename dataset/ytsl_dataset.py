@@ -26,7 +26,7 @@ def merge_json_files(json_paths):
             continue
         with open(json_path, 'r') as f:
             data = json.load(f)
-            for k,v in data.items():
+            for k, v in data.items():
                 if k not in merged_data:
                     merged_data[k] = v
                 else:
@@ -40,11 +40,8 @@ class SignSegmentS2TDataset(Dataset):
       - "caption": the spoken text to tokenize
       - "gloss": entire pseudo-gloss string
       - "topics": list of topic strings (only if keywords_proj = True)
-    Also loads:
-      - processed_words.pkl for gloss tokens
-      - processed_topics.pkl for topic tokens, only if keywords_proj = True
 
-    Returns (name_sample, frames_tensor, text_str, pg_id, topic_ids OR None).
+    Returns => (name_sample, frames_tensor, text_str, pg_id, topic_ids).
     """
 
     def __init__(
@@ -77,10 +74,7 @@ class SignSegmentS2TDataset(Dataset):
 
         with open(emb_pkl, "rb") as pf:
             self.dict_processed_words = pickle.load(pf)
-        # e.g. {
-        #    "dict_sentence": { "ACANTHUS LEAF ..." => [12, 49, ...] },
-        #    "dict_lem_to_id": { "ACANTHUS":12, "LEAF":49, ... }
-        # }
+        # e.g. { "dict_sentence": {...}, "dict_lem_to_id": {...} }
 
         # 2b) If 'keywords_proj' is True, load topic dictionary
         self.use_topics = bool(self.config["model"].get("keywords_proj", False))
@@ -90,21 +84,35 @@ class SignSegmentS2TDataset(Dataset):
                 raise FileNotFoundError(f"Topic pickle not found => {topic_pkl}")
             with open(topic_pkl, "rb") as pf:
                 self.dict_processed_topics = pickle.load(pf)
-            # e.g. {
-            #    "dict_lem_counter": {...},
-            #    "dict_sentence": { (topicA, topicB,...): [topicA, topicB,...] },
-            #    "dict_lem_to_id": { "Health":0, "Dust Mask":1, ... }
-            # }
         else:
             self.dict_processed_topics = None
 
-        # 3) Data transform pipeline
-        self.data_transform = T.Compose([
-            T.Lambda(lambda x: x.float() / 255.0),
-            T.Resize((self.input_size, self.input_size), antialias=True),
-            T.Normalize([0.485, 0.456, 0.406],
-                        [0.229, 0.224, 0.225]),
-        ])
+        # 3) Decide on transforms based on phase
+        if self.phase == "train":
+            # Augmentation pipeline for training
+            self.augment_transform = T.Compose([
+                # RandomResizedCrop can handle random scale/ratio
+                T.RandomResizedCrop(self.input_size, scale=(0.8, 1.0)),
+                # Random horizontal flip with 50% chance
+                # T.RandomHorizontalFlip(p=0.5),
+                # Color jitter for brightness, contrast, saturation, hue
+                T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                # Convert PIL back to tensor
+                T.ToTensor(),
+                # Random Erase (feature masking)
+                T.RandomErasing(p=0.3, scale=(0.02, 0.2), ratio=(0.3, 3.3)),
+                # Finally normalize
+                T.Normalize([0.485, 0.456, 0.406],
+                            [0.229, 0.224, 0.225]),
+            ])
+        else:
+            # Lighter transform (no heavy augmentation) for val/test
+            self.eval_transform = T.Compose([
+                T.Resize((self.input_size, self.input_size), antialias=True),
+                T.ToTensor(),
+                T.Normalize([0.485, 0.456, 0.406],
+                            [0.229, 0.224, 0.225]),
+            ])
 
         # 4) Max length frames
         self.max_length = self.config["data"].get("max_length", 300)
@@ -118,7 +126,6 @@ class SignSegmentS2TDataset(Dataset):
         num_clips = max(1, int(num_frames * k))
         clip_size = max(1, num_frames // num_clips)
         indices = []
-        
         for i in range(num_clips):
             start_idx = i * clip_size
             if train:
@@ -151,7 +158,6 @@ class SignSegmentS2TDataset(Dataset):
         topic_ids = None
         if self.use_topics and "topics" in seg_info:
             topic_list = seg_info["topics"]
-            # Map each topic to ID from dict_processed_topics
             topic_ids = [self.dict_processed_topics["dict_lem_to_id"].get(t, -1) for t in topic_list]
 
         # E) Video frames
@@ -167,17 +173,36 @@ class SignSegmentS2TDataset(Dataset):
             vr = VideoReader(mp4_path, ctx=cpu(0))
             num_frames = len(vr)
             indices = self.get_downsampled_indices(num_frames, (self.phase=="train"), k=self.k)
-            frames = vr.get_batch(indices).asnumpy()  # (T,H,W,3)
-            frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # => (T,3,H,W)
-            frames = self.data_transform(frames)
-            if frames.shape[0] > self.max_length:
-                frames = frames[:self.max_length]
+            # shape => (len(indices), H, W, 3)
+            frames = vr.get_batch(indices).asnumpy()
         except Exception as e:
             print(f"[ERROR] loading {mp4_path}: {e}")
             return None
 
-        # Return everything
-        return (name_sample, frames, text_str, pg_id, topic_ids)
+        # Convert each frame to PIL, apply transforms
+        frame_tensors = []
+        for fidx in range(frames.shape[0]):
+            frame_np = frames[fidx]  # shape: (H, W, 3)
+            frame_pil = Image.fromarray(frame_np)
+
+            if self.phase == "train":
+                # apply augment transform
+                out_tensor = self.augment_transform(frame_pil)
+            else:
+                # apply eval transform
+                out_tensor = self.eval_transform(frame_pil)
+
+            frame_tensors.append(out_tensor)
+
+        # Stack => shape (T, 3, H, W)
+        frames_tensor = torch.stack(frame_tensors, dim=0)
+
+        # Possibly truncate to self.max_length
+        if frames_tensor.shape[0] > self.max_length:
+            frames_tensor = frames_tensor[:self.max_length]
+
+        return (name_sample, frames_tensor, text_str, pg_id, topic_ids)
+
 
 def signsegment_s2t_collate_fn(batch, tokenizer, max_words=128):
     """

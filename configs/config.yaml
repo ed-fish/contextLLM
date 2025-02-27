@@ -18,7 +18,7 @@ model:
 
 training:
   wandb: online
-  scale_embedding: False
+  scale_embedding: True
   # ckpt_path: "/home/ef0036/remote_mount/nobackup/users/ef0036/contextLLM/outputs/run_2025-02-20_16-06-15/last.ckpt"
   # ckpt_path: "/home/ef0036/Projects/contextLLM/outputs/run_2025-02-18_00-10-30/best-epoch=002-val_total_loss=0.680.ckpt"
   labels: "gloss"

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
-from transformers import MBartForConditionalGeneration, MBartTokenizer, MBartConfig
+# from transformers import MBartForConditionalGeneration, MBartTokenizer, MBartConfig
 from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from sacrebleu.metrics import BLEU
 import pandas as pd
@@ -56,8 +56,10 @@ class FineTuneModel(pl.LightningModule):
             print("no model loaded random init")
 
         ################ Initialize the tokenizer ####################
-        self.tokenizer = MBartTokenizer.from_pretrained(self.config['model']['tokenizer'],
-                                                          src_lang='en_XX', tgt_lang='en_XX')
+        from transformers import T5Tokenizer
+
+
+        self.tokenizer = T5Tokenizer.from_pretrained("t5-base")
         # This token is used in generation; note the space before period in your original code.
         self.end_sym = ' .'
         self.max_txt_len = 64
@@ -123,7 +125,7 @@ class FineTuneModel(pl.LightningModule):
                         src_in,
                         max_new_tokens=150,  # You can adjust this for speed vs. quality
                         num_beams=4,
-                        decoder_start_token_id=self.tokenizer.lang_code_to_id['en_XX']
+                        # decoder_start_token_id=self.tokenizer.lang_code_to_id['en_XX']
                     )
                 gen_text = self.tokenizer.batch_decode(out, skip_special_tokens=True)
                 all_gen_outputs.extend(gen_text)
@@ -221,17 +223,20 @@ class FineTuneModel(pl.LightningModule):
         predicted = torch.argmax(logits, dim=-1)
         generated_texts = self.tokenizer.batch_decode(predicted, skip_special_tokens=True)
         return generated_texts
+    
 
     def generate(self, src_input):
-        max_new_tokens, num_beams, decoder_start_token_id = 150, 4, self.tokenizer.lang_code_to_id['en_XX']
+        max_new_tokens = 150
+        num_beams = 4
+        # For T5, we typically just let it figure out the BOS token or specify decoder_start_token_id=self.tokenizer.pad_token_id
         out = self.model.generate(
             src_input,
             max_new_tokens,
-            num_beams,
-            decoder_start_token_id
+            num_beams
         )
         generated_texts = self.tokenizer.batch_decode(out, skip_special_tokens=True)
         return generated_texts
+
 
     def calc_loss(self, outputs, targets):
         vocab_siz = outputs.size(-1)

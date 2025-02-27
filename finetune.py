@@ -18,6 +18,8 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+from transformers import T5Tokenizer
+
 torch.set_float32_matmul_precision("medium")
 
 def get_args_parser():
@@ -162,8 +164,11 @@ def main(args):
                 args=args, 
                 eval_freq=args.eval_freq,
                 csv_dire=args.save_csv)
+    
 
-    tokenizer = MBartTokenizer.from_pretrained(config['model']['tokenizer'], src_lang = 'en_XX', tgt_lang = 'en_XX')
+
+    tokenizer = T5Tokenizer.from_pretrained("t5-base")
+
 
     data_module = SignSegmentS2TDataModule(
             train_json=args.train_json,
