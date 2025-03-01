@@ -160,7 +160,7 @@ def main(args):
         accelerator="gpu",
         devices=torch.cuda.device_count(),  # Automatically detects number of GPUs
         min_epochs=1,
-        strategy="ddp_find_unused_parameters_true",
+        strategy="ddp",
         max_epochs=args.epochs,
         precision=16,
         callbacks=callbacks,
