@@ -7,13 +7,14 @@ import torch.backends.cudnn as cudnn
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from transformers import MBartTokenizer
 import yaml
 from pathlib import Path
 from datetime import datetime
 
 # Your model:
 from models.Pretrain_Model import PreTrainModel
+from transformers import T5Tokenizer
+
 
 # Utility for directory management (if still needed):
 from models.utils import manage_directory
@@ -136,7 +137,8 @@ def main(args):
     )
 
     # Create tokenizer
-    tokenizer = MBartTokenizer.from_pretrained(args.tokenizer_path)
+
+    tokenizer = T5Tokenizer.from_pretrained("t5-base")
 
     # Create the new decord-based DataModule
     # (Make sure your SignSegmentDataModule uses train_json, val_json, test_json 
@@ -158,11 +160,12 @@ def main(args):
         accelerator="gpu",
         devices=torch.cuda.device_count(),  # Automatically detects number of GPUs
         min_epochs=1,
-        strategy="ddp",
+        strategy="ddp_find_unused_parameters_true",
         max_epochs=args.epochs,
         precision=16,
         callbacks=callbacks,
         accumulate_grad_batches=args.accumulate_batches,
+        gradient_clip_val=0.5,
     )
 
     # Train

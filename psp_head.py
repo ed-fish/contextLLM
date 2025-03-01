@@ -115,6 +115,147 @@ class HeadModel(nn.Module):
             "mask": mask,
         }
 
+class GaussianHeadModel(nn.Module):
+    """
+    This model:
+      1) Takes video features x of shape [B, T, D].
+      2) Learns an embedding for each possible gloss, shape [V, D].
+      3) Computes a dot-product alignment => shape [B, T, V].
+      4) Applies a Gaussian weighting to encourage each gloss v to only match frames near its ideal time.
+      5) Applies a double-softmax over both the time and vocab dimensions.
+      6) Aggregates to final [B, V] logits.
+    """
+    def __init__(self,
+                 num_classes: int,   # Size of pseudo-gloss vocabulary
+                 in_dim: int,        # Dimension of input frame features (e.g., 1024)
+                 hidden_dim: int,    # Projection dimension (for both frames and gloss embeddings)
+                 sigma: float = 10.0,
+                 dropout: float = 0.5,
+                 use_double_softmax: bool = True,
+                 scale_time: bool = True,
+                 temperature: float = 0.1):
+        """
+        :param num_classes: Number of gloss tokens.
+        :param in_dim: Input frame feature dimension.
+        :param hidden_dim: Dimension to project both frame features and gloss embeddings.
+        :param sigma: Initial standard deviation for Gaussian weighting.
+        :param dropout: Dropout probability.
+        :param use_double_softmax: Whether to use double-softmax over time & vocab.
+        :param scale_time: If True, estimate each gloss’s time index by linear mapping.
+        :param temperature: Temperature for scaling the combined scores.
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+        self.use_double_softmax = use_double_softmax
+        self.scale_time = scale_time
+        self.temperature = temperature
+
+        # 1) Linear projection from in_dim to hidden_dim
+        self.frame_proj = nn.Linear(in_dim, hidden_dim)
+        # Scale down initial projections
+        # (We multiply by a constant factor later in forward.)
+        
+        # Register sigma as a learnable parameter, but constrain it via a minimum value.
+        self.sigma = nn.Parameter(torch.tensor(float(sigma)))
+        # We'll register a buffer for sigma_min to prevent it from collapsing.
+        self.register_buffer("sigma_min", torch.tensor(2.0))
+
+        # 2) Gloss embeddings: shape [num_classes, hidden_dim]
+        self.gloss_embedding = nn.Embedding(num_classes, hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # Initialize weights
+        nn.init.xavier_uniform_(self.frame_proj.weight)
+        nn.init.normal_(self.gloss_embedding.weight, std=0.02)
+
+    def forward(self, x, mask=None):
+        """
+        :param x: Tensor of shape [B, T, in_dim] (video frame features)
+        :param mask: Optional binary mask of shape [B, T] (1 for valid frames, 0 for padding)
+        :return: A dict with keys:
+                 "logits": [B, num_classes] – final gloss logits,
+                 "alignment": [B, T, num_classes] – the per-frame alignment distribution,
+                 "scores": [B, T, num_classes] – the combined scores before softmax.
+        """
+        # Ensure no non-finite values are present.
+        assert torch.isfinite(x).all(), "Non-finite values in head input!"
+
+        B, T, _ = x.shape
+
+        # 1) Project frames to hidden_dim and apply dropout.
+        x = self.dropout(x)
+        # Scale down the projection for stability.
+        x = self.frame_proj(x) * 0.1  # scaling factor
+        # Normalize each feature vector.
+        x = x / (x.norm(dim=-1, keepdim=True) + 1e-9)
+
+        # 2) Obtain gloss embeddings and normalize.
+        g = self.gloss_embedding.weight
+        g = g / (g.norm(dim=-1, keepdim=True) + 1e-9)
+        # Optionally scale gloss embeddings.
+        g = g * 0.5
+
+        # 3) Compute dot-product scores: [B, T, num_classes]
+        scores = torch.matmul(x, g.transpose(0, 1))
+        # We scale scores by an inverse temperature factor (here, 1/0.1).
+        scores = scores / self.temperature
+
+        # 4) Compute Gaussian weighting.
+        # Determine time indices for frames and gloss tokens.
+        t_idx = torch.arange(T, device=x.device).float()  # shape [T]
+        if self.scale_time:
+            v_idx = torch.arange(self.num_classes, device=x.device).float() + 0.5
+            v_idx = v_idx / self.num_classes * T  # shape [num_classes]
+        else:
+            v_idx = torch.arange(self.num_classes, device=x.device).float()
+        # Compute squared distance matrix: we want shape [num_classes, T]
+        dist = (t_idx.unsqueeze(0) - v_idx.unsqueeze(1)) ** 2  # [V, T]
+
+        # Clamp sigma to ensure it doesn't go below sigma_min.
+        sigma = torch.clamp(self.sigma, min=self.sigma_min)
+        sigma_sq = sigma**2 + 1e-6
+
+        # Compute Gaussian weights: w(v,t) = exp(- (t - v_idx)^2 / (2*sigma^2) )
+        weights = torch.exp(-dist / (2.0 * sigma_sq))  # shape [V, T]
+        # We want to add the log of weights to our scores, so transpose to [T, V] and add epsilon.
+        weights_t_v = weights.transpose(0, 1)  # shape [T, V]
+        log_w = torch.log(weights_t_v + 1e-12).unsqueeze(0)  # shape [1, T, V]
+
+        # Add the log Gaussian weights to scores.
+        combined_scores = scores + log_w
+
+        # 5) Apply mask if provided.
+        if mask is not None:
+            # mask: [B, T] --> unsqueeze to [B, T, 1]
+            mask = mask.unsqueeze(-1)
+            # It is critical that every sample has at least one valid frame.
+            if not mask.any(dim=1).all():
+                raise ValueError("One or more samples have all frames masked!")
+            combined_scores = combined_scores.masked_fill(~mask.bool(), -1e9)
+
+        # 6) Compute double softmax in log space for stability.
+        # Compute log softmax over vocab dimension (axis=-1) and over time dimension (axis=-2)
+        log_cls_softmax = F.log_softmax(combined_scores, dim=-1)   # [B, T, V]
+        log_time_softmax = F.log_softmax(combined_scores, dim=-2)    # [B, T, V]
+        # Combine these: elementwise sum in log-space corresponds to product in normal space.
+        log_alignment = log_cls_softmax + log_time_softmax
+        alignment = torch.exp(log_alignment)  # [B, T, V]
+
+        # 7) Aggregate over time: use logsumexp over time dimension to get [B, V]
+        logits_log = torch.logsumexp(log_alignment, dim=1)
+        # For numerical stability, subtract the max and then exponentiate.
+        logits = torch.exp(logits_log - torch.max(logits_log, dim=-1, keepdim=True)[0])
+        # Now logits should be positive and finite.
+        
+        return {
+            "logits": logits,         # [B, num_classes]
+            "alignment": alignment,     # [B, T, num_classes]
+            "scores": combined_scores   # [B, T, num_classes]
+        }
+    
+
 if __name__ == "__main__":
     import torch
 

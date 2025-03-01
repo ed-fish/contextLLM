@@ -10,7 +10,7 @@ from dataset.ytsl_dataset import SignSegmentS2TDataModule
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, Callback
-from transformers import MBartTokenizer
+
 import yaml
 
 import os

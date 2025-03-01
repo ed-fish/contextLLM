@@ -1,7 +1,7 @@
 
 # Example config.yaml
 data:
-  max_length: 50
+  max_length: 100
   vocab_file: data/combined_files/combined_vocab.pkl
   topic_file: data/combined_files/keywords_vocab.pkl
   root_dir: /home/ef0036/remote_mount/nobackup/scratch4weeks/ef0036/

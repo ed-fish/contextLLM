@@ -1,6 +1,7 @@
 import torch
 from collections import OrderedDict
 from pytorch_lightning.callbacks import Callback
+import torch.nn as nn
 import os
 
 def manage_directory(path):
@@ -61,27 +62,41 @@ def extract_layers_by_prefix(checkpoint_path, prefixes):
         
     return matched_layers, filtered_state_dict
 import torch.nn.functional as F
-class KLLoss(torch.nn.Module):
-    """Loss that uses a 'hinge' on the lower bound.
-    This means that for samples with a label value smaller than the threshold, the loss is zero if the prediction is
-    also smaller than that threshold.
-    args:
-        error_matric:  What base loss to use (MSE by default).
-        threshold:  Threshold to use for the hinge.
-        clip:  Clip the loss if it is above this value.
+
+class KLLoss(nn.Module):
+    """
+    A KL divergence loss between the predicted distribution (via log_softmax)
+    and a target distribution (via softmax).
+
+    The default setup:
+      - We interpret `prediction` as raw logits of shape [B, D].
+      - We interpret `label` as some real values in shape [B, D], 
+        which we scale by 10 then softmax to get a target distribution.
+      - We compute KL(target || prediction) via:
+          F.kl_div(log_pred, target_dist, reduction="batchmean")
     """
 
-    def __init__(self, error_metric=torch.nn.KLDivLoss(size_average=True, reduce=True)):
+    def __init__(self):
         super().__init__()
-        # print('=========using KL Loss=and has temperature and * bz==========')
-        self.error_metric = error_metric
+        # 'batchmean': sum of kl-div over all elements / batch_size
+        self.error_metric = nn.KLDivLoss(reduction="batchmean")
 
     def forward(self, prediction, label):
-        batch_size = prediction.shape[0]
-        probs1 = F.log_softmax(prediction, 1)
-        probs2 = F.softmax(label * 10, 1)
-        loss = self.error_metric(probs1, probs2) * batch_size
-        return loss
+        """
+        :param prediction: [B, D] raw logits for the model’s distribution
+        :param label: [B, D] real values. We multiply by 10 & do softmax => target distribution
+        :return: scalar kl loss
+        """
+        # 1) log_softmax of the prediction => shape [B, D]
+        log_probs_pred = F.log_softmax(prediction, dim=1)
+
+        # 2) softmax of label => shape [B, D], interpret as target distribution
+        target_dist = F.softmax(label * 10.0, dim=1)
+
+        # 3) KLDivLoss
+        # kl_div expects input=log_probs, target=prob_dist => KL(target || pred)
+        kl = self.error_metric(log_probs_pred, target_dist)
+        return kl
 
 class SaveBestModelOnNEpochs(Callback):
     def __init__(self, save_every_n_epochs, monitor, mode, dirpath, filename_template="best-epoch={epoch:03d}-val_loss={val_loss:.3f}-val_bleu={val_bleu:.3f}.ckpt"):
@@ -194,7 +209,7 @@ class PG_Loss(nn.Module):
         super().__init__()
         # We use BCELoss with reduction='none', so we can sum manually
         # at the end. That helps when you want to accumulate gradients.
-        self.bce_loss_fn = nn.BCELoss(reduction="none")
+        self.bce_loss_fn = nn.BCELoss(reduction="mean")
 
     def forward(self, src, tgt):
         """
@@ -220,6 +235,7 @@ class PG_Loss(nn.Module):
 
             # 2) Clamp preds => avoid exact 0 or 1
             preds = torch.clamp(src.float(), 1e-8, 1.0 - 1e-8)
+
             
             # 3) BCELoss with "none"
             per_elem_loss = self.bce_loss_fn(preds, gloss_targets)  # shape => (batch_size, vocab_size)
@@ -227,7 +243,7 @@ class PG_Loss(nn.Module):
             # 4) Sum over all elements => total scalar
             # If you're accumulating gradients, using sum means the total gradient scale 
             # grows with batch size or accumulation steps, which may be desired.
-            return per_elem_loss.mean() 
+            return per_elem_loss
         
 
 
@@ -259,3 +275,55 @@ class PG_FocalLossProb(nn.Module):
                 return loss.mean()
             else:
                 return loss
+           
+class PG_KL_Loss(nn.Module):
+    """
+    This loss computes a symmetric KL divergence between the predicted gloss distribution
+    and a smoothed target distribution.
+    """
+    def __init__(self, reduction="mean"):
+        super().__init__()
+        self.reduction = reduction
+
+    def forward(self, logits, token_lists):
+        """
+        :param logits: Tensor of shape [B, V] from GaussianHeadModel (assumed positive).
+        :param token_lists: A list (length B) of lists of gloss token indices that are true for each sample.
+        :return: A scalar loss.
+        """
+        B, V = logits.shape
+        
+        # 1) Convert logits to a probability distribution.
+        probs = torch.clamp(logits, min=1e-6, max=1.0)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-12)  # [B, V]
+        
+        # 2) Build the target distribution with smoothing.
+        targets = torch.full((B, V), 1e-6 / V, device=logits.device)
+        for i, tokens in enumerate(token_lists):
+            valid_tokens = [t for t in tokens if 0 <= t < V]
+            if valid_tokens:
+                count = len(valid_tokens)
+                # Distribute 90% of the mass uniformly over the true tokens,
+                # and 10% uniformly over all tokens.
+                targets[i, valid_tokens] = 0.9 / count
+                targets[i] += 0.1 / V
+            else:
+                # If no valid tokens, use uniform distribution.
+                targets[i] = 1.0 / V
+        
+        # 3) Compute symmetric KL divergence.
+        log_p = torch.log(probs + 1e-12)
+        log_q = torch.log(targets + 1e-12)
+        # Compute elementwise KL divergences and average over batch.
+        kl_per_sample = 0.5 * (
+            (probs * (log_p - log_q)).sum(dim=-1) +
+            (targets * (log_q - log_p)).sum(dim=-1)
+        )
+        
+        if self.reduction == "mean":
+            return kl_per_sample.mean()
+        elif self.reduction == "sum":
+            return kl_per_sample.sum()
+        else:
+            return kl_per_sample
+ 

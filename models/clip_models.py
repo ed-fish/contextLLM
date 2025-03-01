@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import MBartForConditionalGeneration
 from models.spatial_models.frame_models.dino_adaptor_model import Model
 from timm.models.layers import DropPath
 from peft import get_peft_model, LoraConfig, TaskType
@@ -12,7 +11,7 @@ from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 import torchvision
 import math
-from psp_head import HeadModel
+from psp_head import HeadModel, GaussianHeadModel
 from transformers import T5ForConditionalGeneration, AutoConfig
 from peft import get_peft_model, LoraConfig
 PAD_IDX = 1
@@ -372,69 +371,142 @@ class FeatureExtracter(nn.Module):
 
         return src, mask
 
+
 class TextCLIP(nn.Module):
     def __init__(self, config=None, inplanes=1024, planes=1024, head_type='identy'):
         super(TextCLIP, self).__init__()
-        self.model_txt = MBartForConditionalGeneration.from_pretrained(config['model']['transformer']).get_encoder() 
+
+        # 1) Load T5 encoder
+        # For T5-base, d_model = 768. If config['model']['transformer'] = "t5-base"
+        text_encoder = T5ForConditionalGeneration.from_pretrained(
+        't5-base').get_encoder()
+
+        # 2) Optionally wrap with LoRA
+        lora_config = LoraConfig(
+            inference_mode=False,
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.1,
+            # T5 typically has module names like "SelfAttention.q", "SelfAttention.v"
+            target_modules=["q", "v", "SelfAttention.q", "SelfAttention.v"]
+        )
+        self.model_txt = get_peft_model(text_encoder, lora_config)
+
+        # 3) Freeze everything but LoRA
+        for param in self.model_txt.parameters():
+            param.requires_grad = False
+        for name, param in self.model_txt.named_parameters():
+            if "lora" in name:
+                param.requires_grad = True
 
     def forward(self, tgt_input):
-        txt_logits = self.model_txt(input_ids=tgt_input['input_ids'], attention_mask=tgt_input['attention_mask'])[0]
-        txt_logits = txt_logits.mean(dim=1)
+        # T5 encoders typically want input_ids, attention_mask
+        # shape: [batch_size, seq_len]
+        # We do a forward pass, then pool
+        out = self.model_txt(
+            input_ids=tgt_input['input_ids'],
+            attention_mask=tgt_input['attention_mask'],
+            return_dict=True
+        ).last_hidden_state
+
+        # out shape => [batch_size, seq_len, hidden_dim]
+        txt_logits = out.mean(dim=1)  # or use the [CLS] if you had a special token
         return txt_logits
+from transformers import T5ForConditionalGeneration
 
 class ImageCLIP(nn.Module):
-    def __init__(self, config, inplanes=1024, planes=1024, head_type='linear') :
+    def __init__(self, config, inplanes=1024, planes=1024, head_type='gaussian'):
         super(ImageCLIP, self).__init__()
         self.config = config
-        self.model =  FeatureExtracter(dino_path=config['model']['dino'])
-        post_params = {
-        "in_dim": 1024,
-        "hidden_dim": 300,
-        "num_classes": 30520,
-        "dropout": 0.2,
-        "class_temperature": 0.1,
-        "time_temperature": 0.1,
-        "dynamic_time_temperatures": False,
-        "dynamic_class_temperatures": False,
-        "emb_lang": "en",
-        "emb_pkl_dir": f"data/combined_files/combined_vocab.pkl",
-        "trainable_emb": True,
-    }
-        self.head_model = HeadModel(**post_params)
 
-        trans_encoder = MBartForConditionalGeneration.from_pretrained(config['model']['transformer']).get_encoder()
-        lora_config = LoraConfig(
-            inference_mode=False,          # Enable training
-            r=16,                          # Rank of the update matrices
-            lora_alpha=32,                 # LoRA scaling factor
-            lora_dropout=0.1,               # Dropout probability
-            target_modules=["q_proj", "v_proj"]
+        self.proj_1024_to_768 = nn.Linear(1024, 768)
+
+        # 1) Video feature extractor (DINO-based)
+        self.model = FeatureExtracter(dino_path=config['model']['dino'])
+
+        # 2) Replace the old HeadModel with GaussianHeadModel
+        #    Suppose your vocab has 30520 gloss tokens
+        self.head_model = GaussianHeadModel(
+            num_classes=30520,
+            in_dim=1024,     # same as backbone output
+            hidden_dim=512,  # or whatever dimension you want
+            sigma=5.0,       # tune for your domain
+            dropout=0.2,
+            use_double_softmax=True
         )
 
-        self.trans_encoder = get_peft_model(trans_encoder, lora_config)
+        # 3) T5 encoder + LoRA
+        t5_encoder = T5ForConditionalGeneration.from_pretrained("t5-base").get_encoder()
+
+        lora_config = LoraConfig(
+            inference_mode=False,
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.1,
+            target_modules=["q", "v"]
+        )
+        self.trans_encoder = get_peft_model(t5_encoder, lora_config)
+
+        # freeze except LoRA
         for param in self.trans_encoder.parameters():
             param.requires_grad = False
-        # Only unfreeze LoRA parameters
         for name, param in self.trans_encoder.named_parameters():
             if "lora" in name:
                 param.requires_grad = True
-        param_after_lora = sum(p.numel() for p in self.trans_encoder.parameters() if p.requires_grad)
-    
+
+        # 4) learned CLS token for the T5 encoder part
         self.cls_token = nn.Parameter(torch.randn(1, 1, inplanes))
 
+# Apply to critical modules
+
+
+
     def forward(self, src_input):
-        x, attention_mask = self.model(src_input['input_ids'], src_input['src_length_batch'], src_input['attention_mask']) # [b, n, c]
-        # attention_mask = src_input['attention_mask']
-        psp_logits = self.head_model(x, attention_mask)['logits']
+        """
+        src_input: e.g. {
+          "input_ids": [B, T, 3, H, W],
+          "attention_mask": [B, T],
+          "src_length_batch": [B],
+          ...
+        }
 
-        B, N, C = x.shape
-        cls_token = self.cls_token.repeat(B, 1, 1)
-        x = torch.cat((cls_token, x), dim=1)
-        attention_mask = F.pad(attention_mask.flatten(1), (1, 0), value=1.)  # [b, 64] --> [b, 65]
+        Returns: (img_logits, psp_logits)
+        """
+        # A) get sign-video embeddings [B, T, 1024] + time mask [B, T]
+        x, attention_mask = self.model(
+            src_input['input_ids'],
+            src_input['src_length_batch'],
+            src_input['attention_mask']
+        )  # => x: [B, T, 1024], attention_mask: [B, T]
 
-        outs = self.trans_encoder(inputs_embeds=x, attention_mask=attention_mask, return_dict=True)
-        last_hidden_state = outs['last_hidden_state']
-        img_logits = last_hidden_state.mean(dim=1)
+        # B) pass them t
+        # o the new GaussianHeadModel
+        assert attention_mask.any(dim=1).all(), "Some samples have all time steps masked!"
+
+        head_out = self.head_model(x, attention_mask)
+        psp_logits = head_out["logits"]  # shape [B, 30520]
+
+        # C) Insert CLS token at front for T5-based transformation
+        B, N, C = x.shape  # e.g. [B, T, 1024]
+        cls_token = self.cls_token.repeat(B, 1, 1)  # [B, 1, 1024]
+        x = torch.cat((cls_token, x), dim=1)        # => [B, T+1, 1024]
+
+        # pad the attention mask with 1 for the CLS
+        attention_mask = F.pad(
+            attention_mask.view(B, -1), (1, 0), value=1
+        )  # => [B, T+1]
+
+        # D) run T5 encoder on these embeddings
+        # after you create x in shape [B, T+1, 1024], do:
+        x = self.proj_1024_to_768(x)  # => shape [B, T+1, 768]
+        out = self.trans_encoder(
+            inputs_embeds=x,
+            attention_mask=attention_mask,
+            return_dict=True
+        ).last_hidden_state
+        # shape => [B, T+1, encoder_dim] (likely 768 if T5-base)
+        # E) average out for final "image_features"
+        img_logits = out.mean(dim=1)  # [B, encoder_dim]
         return img_logits, psp_logits
 
 class SLRCLIP(nn.Module):
@@ -517,15 +589,6 @@ class SLRCLIP(nn.Module):
         target_matrix += off_diag_matrix
         return target_matrix
 
-def config_decoder(config):
-    from transformers import AutoConfig
-    decoder_type = 'LLMD'
-    if decoder_type == 'LD':
-        return MBartForConditionalGeneration.from_pretrained(config['model']['visual_encoder'], ignore_mismatched_sizes = True, 
-                                                            config = AutoConfig.from_pretrained(config['model']['visual_encoder']+'/config.json'))
-    elif decoder_type == 'LLMD':
-        return MBartForConditionalGeneration.from_pretrained(config['model']['transformer'], ignore_mismatched_sizes = True, 
-                                                            config = AutoConfig.from_pretrained(config['model']['transformer']+'/config.json'))
 class V_encoder(nn.Module):
     def __init__(self,
                 emb_size,
@@ -564,24 +627,6 @@ class gloss_free_model(nn.Module):
         self.args = args
 
         self.backbone = FeatureExtracter(frozen=True, dino_path=self.config['model']['dino'])
-        # self.mbart = MBartForConditionalGeneration.from_pretrained(config['model']['visual_encoder'])
-        # self.mbart = config_decoder(config)
-
-        # lora_config = LoraConfig(
-        #     inference_mode=False,          # Enable training
-        #     r=16,                          # Rank of the update matrices
-        #     lora_alpha=32,                 # LoRA scaling factor
-        #     lora_dropout=0.1,               # Dropout probability
-        #     target_modules=["q_proj", "v_proj"]
-        # )
-        # self.mbart = get_peft_model(self.mbart, lora_config)
-        # for param in self.mbart.parameters():
-        #     param.requires_grad = False
-        # # Only unfreeze LoRA parameters
-        # for name, param in self.mbart.named_parameters():
-        #     if "lora" in name:
-        #         param.requires_grad = True
-
         if config['model']['sign_proj']:
             self.sign_emb = V_encoder(emb_size=768,feature_size=embed_dim)
             self.embed_scale = math.sqrt(embed_dim) if config['training']['scale_embedding'] else 1.0
@@ -638,14 +683,6 @@ class gloss_free_model(nn.Module):
 
         return output.logits, output.loss
 
-        # out = self.mbart(inputs_embeds = inputs_embeds,
-        #             attention_mask = attention_mask.cuda(),
-        #             # decoder_input_ids = tgt_input['input_ids'].cuda(),
-        #             labels = tgt_input['input_ids'].cuda(),
-        #             decoder_attention_mask = tgt_input['attention_mask'].cuda(),
-        #             return_dict = True,
-        #             )
-        # return out['logits'], out['loss']
 
     def generate(self, src_input, max_new_tokens=150, num_beams=4):
         inputs_embeds, attention_mask = self.share_forward(src_input)

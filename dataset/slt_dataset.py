@@ -132,6 +132,8 @@ class S2T_Dataset(Dataset):
         
         with self.tokenizer.as_target_tokenizer():
             tgt_input = self.tokenizer(tgt_batch, return_tensors="pt", padding = True, max_length=self.max_words, truncation=True)
+        ids = tgt_input["input_ids"]
+        # print("T5 input IDs range:", ids.min().item(), ids.max().item())
 
         src_input = {}
         src_input['input_ids'] = img_batch

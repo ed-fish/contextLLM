@@ -10,7 +10,23 @@ from PIL import Image
 import argparse
 import yaml
 import numpy as np
-from transformers import MBartTokenizer
+
+def clamp(n, smallest, largest): return max(smallest, min(n, largest))
+
+class TemporalJitter(object):
+    def __call__(self, frames):
+        """
+        frames: [T,C,H,W] tensor
+        Returns jittered frames with same temporal order
+        """
+        T = frames.shape[0]
+        if T < 4: return frames
+        
+        # Random time warp (10% speed variation)
+        warp_factor = 1.0 + np.random.uniform(-0.1, 0.1)
+        new_T = int(T * warp_factor)
+        indices = torch.linspace(0, T-1, new_T).long()
+        return frames[indices]
 
 SI_IDX, PAD_IDX, UNK_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3, 4
 
@@ -92,13 +108,14 @@ class SignSegmentS2TDataset(Dataset):
             # Augmentation pipeline for training
             self.augment_transform = T.Compose([
                 # RandomResizedCrop can handle random scale/ratio
-                T.RandomResizedCrop(self.input_size, scale=(0.8, 1.0)),
+                T.RandomResizedCrop(self.input_size, scale=(0.6, 1.0)),
                 # Random horizontal flip with 50% chance
                 # T.RandomHorizontalFlip(p=0.5),
                 # Color jitter for brightness, contrast, saturation, hue
                 T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
                 # Convert PIL back to tensor
                 T.ToTensor(),
+                TemporalJitter(),
                 # Random Erase (feature masking)
                 T.RandomErasing(p=0.3, scale=(0.02, 0.2), ratio=(0.3, 3.3)),
                 # Finally normalize
@@ -119,22 +136,58 @@ class SignSegmentS2TDataset(Dataset):
         # 5) Downsample rate
         self.k = self.config["data"].get("downsample_rate", 0.25)
 
-    def get_downsampled_indices(self, num_frames: int, train: bool, k: float = 0.25) -> list:
+    def get_downsampled_indices(self, num_frames: int, train: bool, min_frames=16, max_frames=300) -> list:
         """
-        Get indices of selected frames after downsampling.
+        Temporal-coherent sampling with controlled variability.
+        Maintains order while adding speed/sampling variations.
         """
-        num_clips = max(1, int(num_frames * k))
-        clip_size = max(1, num_frames // num_clips)
-        indices = []
-        for i in range(num_clips):
-            start_idx = i * clip_size
-            if train:
-                idx_ = np.random.randint(start_idx, start_idx + clip_size)
-            else:
-                idx_ = start_idx
-            idx_ = min(idx_, num_frames - 1)  # safety clamp
-            indices.append(idx_)
+        # 1. Determine target frames (same as before)
+        if train:
+            sample_ratio = np.random.choice([0.25, 0.33, 0.5, 0.66, 1.0])
+            target_frames = clamp(int(num_frames*sample_ratio), min_frames, max_frames)
+        else:
+            target_frames = clamp(int(num_frames*0.5), min_frames, max_frames)
+
+        # 2. Adaptive temporal sampling
+        if num_frames <= target_frames:
+            # Linear interpolation for short videos
+            indices = np.linspace(0, num_frames-1, target_frames, dtype=int)
+        else:
+            # Window-based sampling with temporal coherence
+            window_size = num_frames / target_frames
+            indices = []
+            
+            # Random start offset (10% of window size)
+            offset = np.random.uniform(0, window_size*0.1) if train else 0
+            
+            for i in range(target_frames):
+                # Base position with progressive offset
+                pos = offset + i*window_size
+                
+                # Temporal jitter (15% of window)
+                jitter = np.random.uniform(-0.15, 0.15)*window_size if train else 0
+                idx = int(pos + jitter)
+                
+                # Mirror boundaries to avoid edge artifacts
+                if idx < 0: idx = -idx
+                if idx >= num_frames: idx = 2*num_frames - idx - 1
+                idx = np.clip(idx, 0, num_frames-1)
+                
+                indices.append(idx)
+
+        # 3. Temporal dropout (simulate frame misses)
+        if train and len(indices) > 24:
+            # Randomly mask 10-20% of consecutive frames (1-3 signs)
+            drop_start = np.random.randint(0, len(indices)-3)
+            drop_length = np.random.randint(1, 4)
+            indices = [idx for i,idx in enumerate(indices) 
+                    if not (drop_start <= i < drop_start+drop_length)]
+
+        # 4. Final deterministic sort
+        indices = sorted(indices)  # Critical for positional embeddings
+        
         return indices
+
 
     def __len__(self):
         return len(self.keys)
@@ -172,7 +225,7 @@ class SignSegmentS2TDataset(Dataset):
         try:
             vr = VideoReader(mp4_path, ctx=cpu(0))
             num_frames = len(vr)
-            indices = self.get_downsampled_indices(num_frames, (self.phase=="train"), k=self.k)
+            indices = self.get_downsampled_indices(num_frames, (self.phase=="train"), min_frames=16, max_frames=self.max_length)
             # shape => (len(indices), H, W, 3)
             frames = vr.get_batch(indices).asnumpy()
         except Exception as e:
@@ -271,6 +324,9 @@ def signsegment_s2t_collate_fn(batch, tokenizer, max_words=128):
             truncation=True
         )
 
+    ids = tgt_input["input_ids"]
+
+
     # 4) build src_input
     src_input = {
         "input_ids": batch_frames,  # (B, T, 3, H, W)
@@ -295,7 +351,7 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
         data_config,
         batch_size=2,
         num_workers=2,
-        max_words=128,
+        max_words=30520,
         resize=256,
         input_size=224,
     ):
@@ -394,78 +450,78 @@ class SignSegmentS2TDataModule(pl.LightningDataModule):
             )
         )
 
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="SignSegmentS2TDataModule test script.")
-    parser.add_argument("--train_json", type=str, default=None)
-    parser.add_argument("--val_json", type=str, default=None)
-    parser.add_argument("--test_json", type=str, default=None)
-    parser.add_argument("--data_config", type=str, default="configs/config.yaml")
-    parser.add_argument("--tokenizer_path", type=str, default="pretrain_models/MBart_trimmed", help="Path to MBart tokenizer.")
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--num_workers", type=int, default=2)
-    parser.add_argument("--max_words", type=int, default=128)
-    parser.add_argument("--resize", type=int, default=256)
-    parser.add_argument("--input_size", type=int, default=224)
-    parser.add_argument("--max_batches", type=int, default=1)
-    args = parser.parse_args()
+# if __name__ == "__main__":
+#     import argparse
+#     parser = argparse.ArgumentParser(description="SignSegmentS2TDataModule test script.")
+#     parser.add_argument("--train_json", type=str, default=None)
+#     parser.add_argument("--val_json", type=str, default=None)
+#     parser.add_argument("--test_json", type=str, default=None)
+#     parser.add_argument("--data_config", type=str, default="configs/config.yaml")
+#     parser.add_argument("--tokenizer_path", type=str, default="pretrain_models/MBart_trimmed", help="Path to MBart tokenizer.")
+#     parser.add_argument("--batch_size", type=int, default=2)
+#     parser.add_argument("--num_workers", type=int, default=2)
+#     parser.add_argument("--max_words", type=int, default=128)
+#     parser.add_argument("--resize", type=int, default=256)
+#     parser.add_argument("--input_size", type=int, default=224)
+#     parser.add_argument("--max_batches", type=int, default=1)
+#     args = parser.parse_args()
 
-    with open(args.data_config, "r") as f:
-        data_config = yaml.safe_load(f)
+#     with open(args.data_config, "r") as f:
+#         data_config = yaml.safe_load(f)
 
-    # Create tokenizer
-    tokenizer = MBartTokenizer.from_pretrained(args.tokenizer_path)
+#     # Create tokenizer
+#     tokenizer = MBartTokenizer.from_pretrained(args.tokenizer_path)
 
-    # Create DataModule
-    dm = SignSegmentS2TDataModule(
-        train_json=args.train_json,
-        val_json=args.val_json,
-        test_json=args.test_json,
-        tokenizer=tokenizer,
-        data_config=data_config,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        max_words=args.max_words,
-        resize=args.resize,
-        input_size=args.input_size
-    )
+#     # Create DataModule
+#     dm = SignSegmentS2TDataModule(
+#         train_json=args.train_json,
+#         val_json=args.val_json,
+#         test_json=args.test_json,
+#         tokenizer=tokenizer,
+#         data_config=data_config,
+#         batch_size=args.batch_size,
+#         num_workers=args.num_workers,
+#         max_words=args.max_words,
+#         resize=args.resize,
+#         input_size=args.input_size
+#     )
 
-    dm.setup(stage="fit")
-    train_loader = dm.train_dataloader()
-    if not train_loader:
-        print("[Main] No train loader found.")
-    else:
-        print(f"[Main] Checking train loader with up to {args.max_batches} batches.")
-        for i, batch in enumerate(train_loader):
-            src_input, tgt_input, pgs_list, topics_list = batch
-            if not src_input:
-                print(f"[Main] Skipped an empty train batch due to corrupted samples.")
-                continue
-            print(f"  [Train Batch {i}]")
-            print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
-            print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
-            print("   pgs_list[0]:", pgs_list[0], " (some pseudo-gloss IDs)")
-            print("   topics_list[0]:", topics_list[0], " (some topic IDs or empty if keywords_proj=False)")
-            if i+1 >= args.max_batches:
-                break
+#     dm.setup(stage="fit")
+#     train_loader = dm.train_dataloader()
+#     if not train_loader:
+#         print("[Main] No train loader found.")
+#     else:
+#         print(f"[Main] Checking train loader with up to {args.max_batches} batches.")
+#         for i, batch in enumerate(train_loader):
+#             src_input, tgt_input, pgs_list, topics_list = batch
+#             if not src_input:
+#                 print(f"[Main] Skipped an empty train batch due to corrupted samples.")
+#                 continue
+#             print(f"  [Train Batch {i}]")
+#             print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
+#             print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
+#             print("   pgs_list[0]:", pgs_list[0], " (some pseudo-gloss IDs)")
+#             print("   topics_list[0]:", topics_list[0], " (some topic IDs or empty if keywords_proj=False)")
+#             if i+1 >= args.max_batches:
+#                 break
 
-    dm.setup(stage="test")
-    test_loader = dm.test_dataloader()
-    if not test_loader:
-        print("[Main] No test loader found.")
-    else:
-        print(f"[Main] Checking test loader with up to {args.max_batches} batches.")
-        for i, batch in enumerate(test_loader):
-            src_input, tgt_input, pgs_list, topics_list = batch
-            if not src_input:
-                print(f"[Main] Skipped an empty test batch.")
-                continue
-            print(f"  [Test Batch {i}]")
-            print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
-            print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
-            print("   pgs_list[0]:", pgs_list[0])
-            print("   topics_list[0]:", topics_list[0])
-            if i+1 >= args.max_batches:
-                break
+#     dm.setup(stage="test")
+#     test_loader = dm.test_dataloader()
+#     if not test_loader:
+#         print("[Main] No test loader found.")
+#     else:
+#         print(f"[Main] Checking test loader with up to {args.max_batches} batches.")
+#         for i, batch in enumerate(test_loader):
+#             src_input, tgt_input, pgs_list, topics_list = batch
+#             if not src_input:
+#                 print(f"[Main] Skipped an empty test batch.")
+#                 continue
+#             print(f"  [Test Batch {i}]")
+#             print("   src_input['input_ids'].shape:", src_input["input_ids"].shape)
+#             print("   src_input['attention_mask'].shape:", src_input["attention_mask"].shape)
+#             print("   pgs_list[0]:", pgs_list[0])
+#             print("   topics_list[0]:", topics_list[0])
+#             if i+1 >= args.max_batches:
+#                 break
 
-    print("[Main] Done testing data module.")
+#     print("[Main] Done testing data module.")

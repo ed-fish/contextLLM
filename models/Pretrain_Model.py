@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 import os
 import wandb
 from collections import OrderedDict
-from models.utils import KLLoss, PG_Loss, PG_FocalLossProb
+from models.utils import KLLoss, PG_Loss, PG_FocalLossProb, PG_KL_Loss
 from models.clip_models import SLRCLIP
 import yaml
 
@@ -28,13 +28,14 @@ class PreTrainModel(pl.LightningModule):
         self.lr = lr
         self.loss_img = KLLoss()
         self.loss_txt = KLLoss()
-        loss_function = self.config["model"].get("model", "pgloss")
-        if loss_function == "pgloss":
-            self.loss_pg  = PG_Loss()
-        elif loss_function == "focal_loss":
-            self.loss_pg  = PG_FocalLossProb()
-        else:
-            raise ValueError(f"Invalid loss function: {loss_function}")
+        # loss_function = self.config["model"].get("model", "pgloss")
+        # if loss_function == "pgloss":
+        #     self.loss_pg  = PG_KL_Loss()
+        # elif loss_function == "focal_loss":
+        #     self.loss_pg  = PG_FocalLossProb()
+        # else:
+        #     raise ValueError(f"Invalid loss function: {loss_function}")
+        self.loss_pg = PG_KL_Loss()
 
         self.landa = 0.5  # scale for psp loss
         # 4) Check alpha scheduling or static
@@ -65,8 +66,10 @@ class PreTrainModel(pl.LightningModule):
         # Optionally log LR
         if len(self.trainer.optimizers) > 0:
             optimizer = self.trainer.optimizers[0]
-            lr = optimizer.param_groups[0]['lr']
-            self.log('learning_rate', lr, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            for i, pg in enumerate(optimizer.param_groups):
+                self.log(f'learning_rate/group_{i}', pg['lr'], 
+                        on_step=False, on_epoch=True, 
+                        prog_bar=True, sync_dist=True)
 
     def forward(self, batch):
         """
@@ -111,9 +114,9 @@ class PreTrainModel(pl.LightningModule):
         val_psp_loss  = self.loss_pg(psp_logits, pgs_list)
         val_total_loss= val_clip_loss + self.landa*val_psp_loss
 
-        self.log("val_clip_loss",  val_clip_loss,  on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_psp_loss",   val_psp_loss,   on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_total_loss", val_total_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_clip_loss",  val_clip_loss,  on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_psp_loss",   val_psp_loss,   on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_total_loss", val_total_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return val_total_loss
 
     def test_step(self, input_batch, batch_idx):
@@ -128,24 +131,54 @@ class PreTrainModel(pl.LightningModule):
         test_psp_loss  = self.loss_pg(psp_logits, pgs_list)
         test_total_loss= test_clip_loss + self.landa*test_psp_loss
 
-        self.log("test_clip_loss", test_clip_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test_psp_loss",  test_psp_loss,  on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test_total_loss",test_total_loss,on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test_clip_loss", test_clip_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("test_psp_loss",  test_psp_loss,  on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("test_total_loss",test_total_loss,on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return test_total_loss
-
+    
     def configure_optimizers(self):
-        # e.g. AdamW
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=0.01)
-        steps = self.trainer.estimated_stepping_batches
-        sched = {
-            "scheduler": torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=self.lr,
-                total_steps=steps,
-                pct_start=0.05,
-                anneal_strategy='cos'
-            ),
-            "interval": "step",
-            "frequency": 1,
+        # Separate parameters into different groups
+        optimizer_groups = [
+            {
+                "params": [p for n, p in self.named_parameters() 
+                          if "head_model" in n and "sigma" not in n],
+                "lr": self.lr * 0.1,  # 10% of base LR for head parameters
+                "weight_decay": 0.01
+            },
+            {
+                "params": [p for n, p in self.named_parameters() 
+                          if "head_model.sigma" in n],
+                "lr": self.lr * 0.01,  # 1% for sigma parameter
+                "weight_decay": 0.0
+            },
+            {
+                "params": [p for n, p in self.named_parameters() 
+                          if "head_model" not in n],
+                "lr": self.lr,  # Base LR for other parameters
+                "weight_decay": 0.01
+            }
+        ]
+
+        optimizer = torch.optim.AdamW(optimizer_groups)
+        
+        # Calculate total steps based on your training setup
+        total_steps = self.trainer.estimated_stepping_batches
+        
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=[pg['lr'] for pg in optimizer_groups],
+            total_steps=total_steps,
+            pct_start=0.05,
+            anneal_strategy='cos'
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1
+            }
         }
-        return [optimizer], [sched]
+
+    
